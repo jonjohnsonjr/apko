@@ -25,7 +25,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	gzip "golang.org/x/build/pargzip"
+	gzip "github.com/klauspost/pgzip"
 
 	apkimpl "github.com/chainguard-dev/go-apk/pkg/apk"
 	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
