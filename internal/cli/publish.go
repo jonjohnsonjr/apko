@@ -17,6 +17,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,10 +25,18 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/awslabs/amazon-ecr-credential-helper/ecr-login"
+	"github.com/chrismellard/docker-credential-acr-env/pkg/credhelper"
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/authn/github"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/google"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	coci "github.com/sigstore/cosign/v2/pkg/oci"
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
 
 	"chainguard.dev/apko/pkg/build"
@@ -205,6 +214,34 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 	builtReferences := []string{}
 	additionalTags := []string{}
 
+	keychain := authn.NewMultiKeychain(
+		authn.DefaultKeychain,
+		google.Keychain,
+		authn.NewKeychainFromHelper(ecr.NewECRHelper(ecr.WithLogger(io.Discard))),
+		authn.NewKeychainFromHelper(credhelper.NewACRCredentialsHelper()),
+		github.Keychain,
+	)
+
+	remoteOpts := []remote.Option{
+		remote.WithAuthFromKeychain(keychain),
+		remote.WithTransport(otelhttp.NewTransport(userAgentTransport{remote.DefaultTransport})),
+		remote.WithContext(ctx),
+	}
+
+	pusher, err := remote.NewPusher(remoteOpts...)
+	if err == nil {
+		remoteOpts = append(remoteOpts, remote.Reuse(pusher))
+	} else {
+		bc.Logger().Infof("NewPusher(): %v", err)
+	}
+
+	puller, err := remote.NewPuller(remoteOpts...)
+	if err == nil {
+		remoteOpts = append(remoteOpts, remote.Reuse(puller))
+	} else {
+		bc.Logger().Infof("NewPuller(): %v", err)
+	}
+
 	mtx := sync.Mutex{}
 
 	// We compute the "build date epoch" of the multi-arch image to be the
@@ -253,7 +290,7 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 			// This computation will only affect the timestamp of the image
 			// itself and its SBOMs, since the timestamps on files come from the
 			// APKs.
-			if bc.Options.SourceDateEpoch, err = bc.GetBuildDateEpoch(); err != nil {
+			if bc.Options.SourceDateEpoch, err = bc.GetBuildDateEpoch(ctx); err != nil {
 				return fmt.Errorf("failed to determine build date epoch: %w", err)
 			}
 			if bc.Options.SourceDateEpoch.After(multiArchBDE) {
@@ -261,7 +298,7 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 			}
 
 			var img coci.SignedImage
-			finalDigest, img, err = publishImage(ctx, bc, layer, arch)
+			finalDigest, img, err = publishImage(ctx, bc, layer, arch, remoteOpts)
 			if err != nil {
 				return fmt.Errorf("publishing %s image: %w", arch, err)
 			}
@@ -281,7 +318,7 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 	bc.Options.SourceDateEpoch = multiArchBDE
 
 	if len(archs) > 1 {
-		finalDigest, idx, err = publishIndex(ctx, bc, imgs)
+		finalDigest, idx, err = publishIndex(ctx, bc, imgs, remoteOpts)
 		if err != nil {
 			return fmt.Errorf("publishing image index: %w", err)
 		}
@@ -319,7 +356,7 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 				continue
 			}
 			g.Go(func() error {
-				return oci.Copy(ctx, finalDigest.Name(), at)
+				return oci.Copy(ctx, finalDigest.Name(), at, remoteOpts)
 			})
 		}
 		if err := g.Wait(); err != nil {
@@ -352,12 +389,12 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 			bc.Options.SBOMPath = sbomPath
 
 			g.Go(func() error {
-				if err := bc.GenerateImageSBOM(arch, img); err != nil {
+				if err := bc.GenerateImageSBOM(ctx, arch, img); err != nil {
 					return fmt.Errorf("generating sbom for %s: %w", arch, err)
 				}
 
 				if _, err := oci.PostAttachSBOM(
-					ctx, img, sbomPath, bc.Options.SBOMFormats, arch, bc.Logger(), bc.Options.Tags...,
+					ctx, img, sbomPath, bc.Options.SBOMFormats, arch, bc.Logger(), remoteOpts, bc.Options.Tags...,
 				); err != nil {
 					return fmt.Errorf("attaching sboms to %s image: %w", arch, err)
 				}
@@ -370,13 +407,13 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 			return err
 		}
 
-		if err := bc.GenerateIndexSBOM(finalDigest, imgs); err != nil {
+		if err := bc.GenerateIndexSBOM(ctx, finalDigest, imgs); err != nil {
 			return fmt.Errorf("generating index SBOM: %w", err)
 		}
 
 		if idx != nil {
 			if _, err := oci.PostAttachSBOM(
-				ctx, idx, sbomPath, bc.Options.SBOMFormats, types.Architecture(""), bc.Logger(), bc.Options.Tags...,
+				ctx, idx, sbomPath, bc.Options.SBOMFormats, types.Architecture(""), bc.Logger(), remoteOpts, bc.Options.Tags...,
 			); err != nil {
 				return fmt.Errorf("attaching sboms to index: %w", err)
 			}
@@ -399,11 +436,13 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 }
 
 // publishImage publishes a specific architecture image
-func publishImage(ctx context.Context, bc *build.Context, layer v1.Layer, arch types.Architecture) (imgDigest name.Digest, img coci.SignedImage, err error) {
+func publishImage(ctx context.Context, bc *build.Context, layer v1.Layer, arch types.Architecture, remoteOpts []remote.Option) (imgDigest name.Digest, img coci.SignedImage, err error) {
+	ctx, span := otel.Tracer("").Start(ctx, "publishImage")
+	defer span.End()
 	shouldPushTags := bc.Options.StageTags == ""
 	imgDigest, img, err = oci.PublishImageFromLayer(ctx,
 		layer, bc.ImageConfiguration, bc.Options.SourceDateEpoch, arch, bc.Logger(),
-		bc.Options.SBOMPath, bc.Options.SBOMFormats, bc.Options.Local, shouldPushTags, bc.Options.Tags...,
+		bc.Options.SBOMPath, bc.Options.SBOMFormats, bc.Options.Local, shouldPushTags, remoteOpts, bc.Options.Tags...,
 	)
 	if err != nil {
 		return name.Digest{}, nil, fmt.Errorf("failed to build OCI image for %q: %w", arch, err)
@@ -412,17 +451,19 @@ func publishImage(ctx context.Context, bc *build.Context, layer v1.Layer, arch t
 }
 
 // publishIndex publishes the new image index
-func publishIndex(ctx context.Context, bc *build.Context, imgs map[types.Architecture]coci.SignedImage) (
+func publishIndex(ctx context.Context, bc *build.Context, imgs map[types.Architecture]coci.SignedImage, remoteOpts []remote.Option) (
 	indexDigest name.Digest, idx coci.SignedImageIndex, err error,
 ) {
+	ctx, span := otel.Tracer("").Start(ctx, "publishIndex")
+	defer span.End()
 	shouldPushTags := bc.Options.StageTags == ""
 	if bc.Options.UseDockerMediaTypes {
-		indexDigest, idx, err = oci.PublishDockerIndex(ctx, bc.ImageConfiguration, imgs, bc.Options.Log, bc.Options.Local, shouldPushTags, bc.Options.Tags...)
+		indexDigest, idx, err = oci.PublishDockerIndex(ctx, bc.ImageConfiguration, imgs, bc.Options.Log, bc.Options.Local, shouldPushTags, remoteOpts, bc.Options.Tags...)
 		if err != nil {
 			return name.Digest{}, nil, fmt.Errorf("failed to build Docker index: %w", err)
 		}
 	} else {
-		indexDigest, idx, err = oci.PublishIndex(ctx, bc.ImageConfiguration, imgs, bc.Options.Log, bc.Options.Local, shouldPushTags, bc.Options.Tags...)
+		indexDigest, idx, err = oci.PublishIndex(ctx, bc.ImageConfiguration, imgs, bc.Options.Log, bc.Options.Local, shouldPushTags, remoteOpts, bc.Options.Tags...)
 		if err != nil {
 			return name.Digest{}, nil, fmt.Errorf("failed to build OCI index: %w", err)
 		}

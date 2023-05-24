@@ -15,6 +15,7 @@
 package build
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -138,7 +139,7 @@ func mutateSymLink(fsys apkfs.FullFS, o *options.Options, mut types.PathMutation
 	return nil
 }
 
-func (di *defaultBuildImplementation) MutatePaths(
+func (di *defaultBuildImplementation) MutatePaths(ctx context.Context,
 	fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration,
 ) error {
 	for _, mut := range ic.Paths {

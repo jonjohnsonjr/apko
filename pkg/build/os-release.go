@@ -15,6 +15,7 @@
 package build
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -54,7 +55,7 @@ func maybeGenerateVendorReleaseFile(
 	return nil
 }
 
-func (di *defaultBuildImplementation) GenerateOSRelease(
+func (di *defaultBuildImplementation) GenerateOSRelease(ctx context.Context,
 	fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration,
 ) error {
 	path := filepath.Join("etc", "os-release")

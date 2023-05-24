@@ -37,6 +37,7 @@ import (
 	"github.com/hashicorp/go-multierror"
 	coci "github.com/sigstore/cosign/v2/pkg/oci"
 	"gitlab.alpinelinux.org/alpine/go/repository"
+	"go.opentelemetry.io/otel"
 	"gopkg.in/yaml.v3"
 
 	"chainguard.dev/apko/pkg/build/types"
@@ -73,33 +74,33 @@ func (bc *Context) Summarize() {
 // BuildTarball calls the underlying implementation's BuildTarball
 // which takes the fully populated working directory and saves it to
 // an OCI image layer tar.gz file.
-func (bc *Context) BuildTarball() (string, hash.Hash, hash.Hash, int64, error) {
-	return bc.impl.BuildTarball(&bc.Options, bc.fs)
+func (bc *Context) BuildTarball(ctx context.Context) (string, hash.Hash, hash.Hash, int64, error) {
+	return bc.impl.BuildTarball(ctx, &bc.Options, bc.fs)
 }
 
-func (bc *Context) GenerateImageSBOM(arch types.Architecture, img coci.SignedImage) error {
+func (bc *Context) GenerateImageSBOM(ctx context.Context, arch types.Architecture, img coci.SignedImage) error {
 	opts := bc.Options
 	opts.Arch = arch
-	return bc.impl.GenerateImageSBOM(&opts, &bc.ImageConfiguration, img)
+	return bc.impl.GenerateImageSBOM(ctx, &opts, &bc.ImageConfiguration, img)
 }
 
-func (bc *Context) GenerateIndexSBOM(indexDigest name.Digest, imgs map[types.Architecture]coci.SignedImage) error {
-	return bc.impl.GenerateIndexSBOM(&bc.Options, &bc.ImageConfiguration, indexDigest, imgs)
+func (bc *Context) GenerateIndexSBOM(ctx context.Context, indexDigest name.Digest, imgs map[types.Architecture]coci.SignedImage) error {
+	return bc.impl.GenerateIndexSBOM(ctx, &bc.Options, &bc.ImageConfiguration, indexDigest, imgs)
 }
 
-func (bc *Context) GenerateSBOM() error {
-	return bc.impl.GenerateSBOM(&bc.Options, &bc.ImageConfiguration)
+func (bc *Context) GenerateSBOM(ctx context.Context) error {
+	return bc.impl.GenerateSBOM(ctx, &bc.Options, &bc.ImageConfiguration)
 }
 
-func (bc *Context) InstalledPackages() ([]*apkimpl.InstalledPackage, error) {
-	return bc.impl.InstalledPackages(bc.fs, &bc.Options)
+func (bc *Context) InstalledPackages(ctx context.Context) ([]*apkimpl.InstalledPackage, error) {
+	return bc.impl.InstalledPackages(ctx, bc.fs, &bc.Options)
 }
 
-func (bc *Context) GetBuildDateEpoch() (time.Time, error) {
+func (bc *Context) GetBuildDateEpoch(ctx context.Context) (time.Time, error) {
 	if _, ok := os.LookupEnv("SOURCE_DATE_EPOCH"); ok {
 		return bc.Options.SourceDateEpoch, nil
 	}
-	pl, err := bc.InstalledPackages()
+	pl, err := bc.InstalledPackages(ctx)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("failed to determine installed packages: %w", err)
 	}
@@ -113,6 +114,9 @@ func (bc *Context) GetBuildDateEpoch() (time.Time, error) {
 }
 
 func (bc *Context) BuildImage(ctx context.Context) (fs.FS, error) {
+	ctx, span := otel.Tracer("").Start(ctx, "BuildImage")
+	defer span.End()
+
 	// TODO(puerco): Point to final interface (see comment on buildImage fn)
 	if err := buildImage(ctx, bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration, bc.s6); err != nil {
 		logger := bc.Options.Logger()
@@ -128,9 +132,9 @@ func (bc *Context) BuildImage(ctx context.Context) (fs.FS, error) {
 	return bc.fs, nil
 }
 
-func (bc *Context) BuildPackageList() (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
+func (bc *Context) BuildPackageList(ctx context.Context) (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
 	// TODO(puerco): Point to final interface (see comment on buildImage fn)
-	return buildPackageList(bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration)
+	return buildPackageList(ctx, bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration)
 }
 
 func (bc *Context) Logger() log.Logger {
@@ -145,6 +149,9 @@ func (bc *Context) Logger() log.Logger {
 // packages it all up into a standard OCI image layer
 // tar.gz file.
 func (bc *Context) BuildLayer(ctx context.Context) (string, v1.Layer, error) {
+	ctx, span := otel.Tracer("").Start(ctx, "BuildLayer")
+	defer span.End()
+
 	bc.Summarize()
 
 	// build image filesystem
@@ -152,19 +159,19 @@ func (bc *Context) BuildLayer(ctx context.Context) (string, v1.Layer, error) {
 		return "", nil, err
 	}
 
-	return bc.ImageLayoutToLayer()
+	return bc.ImageLayoutToLayer(ctx)
 }
 
 // ImageLayoutToLayer given an already built-out
 // image in an fs from BuildImage(), create
 // an OCI image layer tgz.
-func (bc *Context) ImageLayoutToLayer() (string, v1.Layer, error) {
+func (bc *Context) ImageLayoutToLayer(ctx context.Context) (string, v1.Layer, error) {
 	// run any assertions defined
 	if err := bc.runAssertions(); err != nil {
 		return "", nil, err
 	}
 
-	layerTarGZ, diffid, digest, size, err := bc.BuildTarball()
+	layerTarGZ, diffid, digest, size, err := bc.BuildTarball(ctx)
 	// build layer tarball
 	if err != nil {
 		return "", nil, err
@@ -172,7 +179,7 @@ func (bc *Context) ImageLayoutToLayer() (string, v1.Layer, error) {
 
 	// generate SBOM
 	if bc.Options.WantSBOM {
-		if err := bc.GenerateSBOM(); err != nil {
+		if err := bc.GenerateSBOM(ctx); err != nil {
 			return "", nil, fmt.Errorf("generating SBOMs: %w", err)
 		}
 	} else {

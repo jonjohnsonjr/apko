@@ -24,6 +24,7 @@
 package build
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -53,7 +54,7 @@ var busyboxLinks map[string][]string
 // note that it changes based on version of busybox,
 // so this should be updated to match busybox version.
 
-func (di *defaultBuildImplementation) InstallBusyboxLinks(fsys apkfs.FullFS, o *options.Options) error {
+func (di *defaultBuildImplementation) InstallBusyboxLinks(ctx context.Context, fsys apkfs.FullFS, o *options.Options) error {
 	// does busybox exist? if not, do not bother with symlinks
 	if _, err := fsys.Stat(busybox); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -66,7 +67,7 @@ func (di *defaultBuildImplementation) InstallBusyboxLinks(fsys apkfs.FullFS, o *
 	if err != nil {
 		return err
 	}
-	installed, err := apk.GetInstalled()
+	installed, err := apk.GetInstalled(ctx)
 	if err != nil {
 		return err
 	}

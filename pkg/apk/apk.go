@@ -29,6 +29,7 @@ import (
 	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 	"github.com/google/go-containerregistry/pkg/name"
 	"gitlab.alpinelinux.org/alpine/go/repository"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
 
 	"chainguard.dev/apko/pkg/build/types"
@@ -72,10 +73,13 @@ type Option func(*APK) error
 
 // Initialize sets the image in Context.WorkDir according to the image configuration,
 // and does everything short of installing the packages.
-func (a *APK) Initialize(ic *types.ImageConfiguration) error {
+func (a *APK) Initialize(ctx context.Context, ic *types.ImageConfiguration) error {
+	ctx, span := otel.Tracer("go-apk").Start(ctx, "Initialize")
+	defer span.End()
+
 	// initialize apk
 	alpineVersions := parseOptionsFromRepositories(ic.Contents.Repositories)
-	if err := a.impl.InitDB(alpineVersions...); err != nil {
+	if err := a.impl.InitDB(ctx, alpineVersions...); err != nil {
 		return fmt.Errorf("failed to initialize apk database: %w", err)
 	}
 
@@ -118,19 +122,19 @@ func (a *APK) Install(ctx context.Context) error {
 }
 
 // ResolvePackages gets list of packages that should be installed
-func (a *APK) ResolvePackages() (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
+func (a *APK) ResolvePackages(ctx context.Context) (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
 	// sync reality with desired apk world
-	return a.impl.ResolveWorld()
+	return a.impl.ResolveWorld(ctx)
 }
 
-func (a *APK) GetInstalled() ([]*apkimpl.InstalledPackage, error) {
-	return a.impl.GetInstalled()
+func (a *APK) GetInstalled(ctx context.Context) ([]*apkimpl.InstalledPackage, error) {
+	return a.impl.GetInstalled(ctx)
 }
 
 // AdditionalTags is a helper function used in conjunction with the --package-version-tag flag
 // If --package-version-tag is set to a package name (e.g. go), then this function
 // returns a list of all images that should be published with the associated version of that package tagged (e.g. 1.18)
-func AdditionalTags(fsys fs.FS, opts options.Options) ([]string, error) {
+func AdditionalTags(ctx context.Context, fsys fs.FS, opts options.Options) ([]string, error) {
 	if opts.PackageVersionTag == "" {
 		return nil, nil
 	}

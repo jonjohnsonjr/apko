@@ -15,6 +15,7 @@
 package build
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,7 +58,7 @@ func userToUserEntry(user types.User) passwd.UserEntry {
 	}
 }
 
-func (di *defaultBuildImplementation) MutateAccounts(
+func (di *defaultBuildImplementation) MutateAccounts(ctx context.Context,
 	fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration,
 ) error {
 	var eg errgroup.Group

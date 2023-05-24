@@ -243,7 +243,7 @@ func BuildCmd(ctx context.Context, imageRef, outputTarGZ string, archs []types.A
 			// This computation will only affect the timestamp of the image
 			// itself and its SBOMs, since the timestamps on files come from the
 			// APKs.
-			if bc.Options.SourceDateEpoch, err = bc.GetBuildDateEpoch(); err != nil {
+			if bc.Options.SourceDateEpoch, err = bc.GetBuildDateEpoch(ctx); err != nil {
 				return fmt.Errorf("failed to determine build date epoch: %w", err)
 			}
 			if bc.Options.SourceDateEpoch.After(multiArchBDE) {
@@ -251,8 +251,7 @@ func BuildCmd(ctx context.Context, imageRef, outputTarGZ string, archs []types.A
 			}
 
 			imageTars[arch] = layerTarGZ
-			img, err := oci.BuildImageFromLayer(
-				layer, bc.ImageConfiguration, bc.Logger(), bc.Options)
+			img, err := oci.BuildImageFromLayer(ctx, layer, bc.ImageConfiguration, bc.Logger(), bc.Options)
 			if err != nil {
 				return fmt.Errorf("failed to build OCI image: %w", err)
 			}
@@ -281,7 +280,7 @@ func BuildCmd(ctx context.Context, imageRef, outputTarGZ string, archs []types.A
 			bc.Options.SBOMPath = sbomPath
 
 			g.Go(func() error {
-				if err := bc.GenerateImageSBOM(arch, img); err != nil {
+				if err := bc.GenerateImageSBOM(ctx, arch, img); err != nil {
 					return fmt.Errorf("generating sbom for %s: %w", arch, err)
 				}
 				return nil
@@ -299,7 +298,7 @@ func BuildCmd(ctx context.Context, imageRef, outputTarGZ string, archs []types.A
 		return fmt.Errorf("failed to build index: %w", err)
 	}
 	if wantSBOM {
-		if err := bc.GenerateIndexSBOM(finalDigest, imgs); err != nil {
+		if err := bc.GenerateIndexSBOM(ctx, finalDigest, imgs); err != nil {
 			return fmt.Errorf("generating index SBOM: %w", err)
 		}
 	}

@@ -20,6 +20,7 @@ import (
 
 	cranecmd "github.com/google/go-containerregistry/cmd/crane/cmd"
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"sigs.k8s.io/release-utils/version"
 )
 
@@ -29,7 +30,7 @@ func New() *cobra.Command {
 		DisableAutoGenTag: true,
 		SilenceUsage:      true,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			http.DefaultTransport = userAgentTransport{http.DefaultTransport}
+			http.DefaultTransport = otelhttp.NewTransport(userAgentTransport{http.DefaultTransport})
 		},
 	}
 

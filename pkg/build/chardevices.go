@@ -1,6 +1,7 @@
 package build
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 
@@ -8,7 +9,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func (di *defaultBuildImplementation) InstallCharDevices(fsys apkfs.FullFS) error {
+func (di *defaultBuildImplementation) InstallCharDevices(ctx context.Context, fsys apkfs.FullFS) error {
 	devices := []struct {
 		path  string
 		major uint32

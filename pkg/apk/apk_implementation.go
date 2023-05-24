@@ -28,7 +28,7 @@ import (
 
 type apkImplementation interface {
 	// InitDB initializes the APK database and all directories.
-	InitDB(versions ...string) error
+	InitDB(ctx context.Context, versions ...string) error
 	// InitKeyring initializes the keyring with the given keyfiles. The first argument, keyfiles, is a list of
 	// keyfile locations. If present, they override the default keyfiles. The second argument, extraKeyfiles, is a list
 	// of files to append to the existing ones.
@@ -42,13 +42,13 @@ type apkImplementation interface {
 	FixateWorld(ctx context.Context, sourceDateEpoch *time.Time) error
 	// ResolveWorld use the world file to determine the target state of the system, including any dependencies.
 	// Does not install or remove any packages.
-	ResolveWorld() (toInstall []*repository.RepositoryPackage, conflicts []string, err error)
+	ResolveWorld(ctx context.Context) (toInstall []*repository.RepositoryPackage, conflicts []string, err error)
 	// SetRepositories sets the repositories to use. Replaces any existing ones.
 	SetRepositories(repos []string) error
 	// GetRepositories gets the list of repositories in use, including pinned ones with their names.
 	GetRepositories() ([]string, error)
 	// GetInstalled gets the list of installed packages.
-	GetInstalled() ([]*apkimpl.InstalledPackage, error)
+	GetInstalled(ctx context.Context) ([]*apkimpl.InstalledPackage, error)
 	// ListInitFiles lists the directories and files that are installed via InitDB
 	ListInitFiles() []tar.Header
 }

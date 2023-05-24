@@ -19,10 +19,18 @@ import (
 	"log"
 	"os"
 	"runtime/pprof"
-	"runtime/trace"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/sdk/resource"
+	"go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 
 	"chainguard.dev/apko/internal/cli"
 )
+
+const name = "github.com/chainguard-dev/apko"
 
 func main() {
 	if pp := os.Getenv("PPROF"); pp != "" {
@@ -35,29 +43,42 @@ func main() {
 			defer pprof.StopCPUProfile()
 		}
 	}
+
 	ctx := context.Background()
-	if tr := os.Getenv("TRACE"); tr != "" {
-		f, err := os.Create(tr)
-		if err != nil {
-			log.Fatalf("failed to create trace output file: %v", err)
-		}
-		defer func() {
-			if err := f.Close(); err != nil {
-				log.Fatalf("failed to close trace file: %v", err)
-			}
-		}()
 
-		if err := trace.Start(f); err != nil {
-			log.Fatal(err)
-		}
-		defer trace.Stop()
-
-		ctx2, task := trace.NewTask(ctx, "apko")
-		defer task.End()
-
-		ctx = ctx2
+	client := otlptracehttp.NewClient()
+	exporter, err := otlptrace.New(ctx, client)
+	if err != nil {
+		log.Fatalf("creating OTLP trace exporter: %v", err)
 	}
+	tp := trace.NewTracerProvider(
+		trace.WithBatcher(exporter),
+		trace.WithResource(newResource()),
+	)
+	otel.SetTracerProvider(tp)
+	defer func() {
+		if err := tp.Shutdown(ctx); err != nil {
+			log.Fatalf("trace provider shutdown: %v", err)
+		}
+	}()
+
+	ctx, span := otel.Tracer(name).Start(ctx, "apko")
+	defer span.End()
+
 	if err := cli.New().ExecuteContext(ctx); err != nil {
 		log.Fatalf("error during command execution: %v", err)
 	}
+}
+
+func newResource() *resource.Resource {
+	r, _ := resource.Merge(
+		resource.Default(),
+		resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceName("apko"),
+			// semconv.ServiceVersion("v0.1.0"),
+			// attribute.String("environment", "demo"),
+		),
+	)
+	return r
 }
