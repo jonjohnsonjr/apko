@@ -15,13 +15,49 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os"
+	"runtime/pprof"
+	"runtime/trace"
 
 	"chainguard.dev/apko/internal/cli"
 )
 
 func main() {
-	if err := cli.New().Execute(); err != nil {
+	if pp := os.Getenv("PPROF"); pp != "" {
+		if pp != "" {
+			f, err := os.Create(pp)
+			if err != nil {
+				log.Fatal(err)
+			}
+			pprof.StartCPUProfile(f)
+			defer pprof.StopCPUProfile()
+		}
+	}
+	ctx := context.Background()
+	if tr := os.Getenv("TRACE"); tr != "" {
+		f, err := os.Create(tr)
+		if err != nil {
+			log.Fatalf("failed to create trace output file: %v", err)
+		}
+		defer func() {
+			if err := f.Close(); err != nil {
+				log.Fatalf("failed to close trace file: %v", err)
+			}
+		}()
+
+		if err := trace.Start(f); err != nil {
+			log.Fatal(err)
+		}
+		defer trace.Stop()
+
+		ctx2, task := trace.NewTask(ctx, "apko")
+		defer task.End()
+
+		ctx = ctx2
+	}
+	if err := cli.New().ExecuteContext(ctx); err != nil {
 		log.Fatalf("error during command execution: %v", err)
 	}
 }

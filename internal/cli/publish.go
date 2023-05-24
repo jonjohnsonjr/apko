@@ -238,7 +238,7 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 				return fmt.Errorf("failed to update build context for %q: %w", arch, err)
 			}
 
-			layerTarGZ, layer, err := bc.BuildLayer()
+			layerTarGZ, layer, err := bc.BuildLayer(ctx)
 			if err != nil {
 				return fmt.Errorf("failed to build layer image for %q: %w", arch, err)
 			}

@@ -15,6 +15,7 @@
 package build
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -58,7 +59,7 @@ type buildImplementation interface {
 	// InitializeApk do all of the steps to set up apk for installing packages in the working directory
 	InitializeApk(apkfs.FullFS, *options.Options, *types.ImageConfiguration) error
 	// InstallPackages install the packages
-	InstallPackages(apkfs.FullFS, *options.Options, *types.ImageConfiguration) error
+	InstallPackages(context.Context, apkfs.FullFS, *options.Options, *types.ImageConfiguration) error
 	// InstalledPackages fetches the installed package list
 	InstalledPackages(fsys apkfs.FullFS, o *options.Options) ([]*apkimpl.InstalledPackage, error)
 	// ResolvePackages resolve the names and versions of packages to be installed
@@ -72,7 +73,7 @@ type buildImplementation interface {
 	// ValidateImageConfiguration check that the supplied ImageConfiguration is valid
 	ValidateImageConfiguration(*types.ImageConfiguration) error
 	// BuildImage based on the ImageConfiguration, run all of the steps to generate the laid out paths in the working directory
-	BuildImage(*options.Options, *types.ImageConfiguration, *exec.Executor, *s6.Context) (fs.FS, error)
+	BuildImage(context.Context, *options.Options, *types.ImageConfiguration, *exec.Executor, *s6.Context) (fs.FS, error)
 	// WriteSupervisionTree insert the configuration files and binaries in the working directory for s6 to operate
 	WriteSupervisionTree(*s6.Context, *types.ImageConfiguration) error
 	// GenerateIndexSBOM generate an SBOM for the index
@@ -230,12 +231,12 @@ func (di *defaultBuildImplementation) InitializeApk(fsys apkfs.FullFS, o *option
 	return apk.Initialize(ic)
 }
 
-func (di *defaultBuildImplementation) InstallPackages(fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration) error {
+func (di *defaultBuildImplementation) InstallPackages(ctx context.Context, fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration) error {
 	apk, err := chainguardAPK.NewWithOptions(fsys, *o)
 	if err != nil {
 		return err
 	}
-	return apk.Install()
+	return apk.Install(ctx)
 }
 
 func (di *defaultBuildImplementation) InstalledPackages(fsys apkfs.FullFS, o *options.Options) ([]*apkimpl.InstalledPackage, error) {
@@ -267,9 +268,10 @@ func (di *defaultBuildImplementation) AdditionalTags(fsys apkfs.FullFS, o *optio
 }
 
 func (di *defaultBuildImplementation) BuildImage(
+	ctx context.Context,
 	o *options.Options, ic *types.ImageConfiguration, e *exec.Executor, s6context *s6.Context,
 ) (fs.FS, error) {
-	if err := buildImage(di.workdirFS, di, o, ic, s6context); err != nil {
+	if err := buildImage(ctx, di.workdirFS, di, o, ic, s6context); err != nil {
 		return nil, err
 	}
 	return di.workdirFS, nil
@@ -284,6 +286,7 @@ func (di *defaultBuildImplementation) BuildImage(
 // TODO(puerco): In order to have a structure we can mock, we need to split
 // image building to its own interface or split out to its own package.
 func buildImage(
+	ctx context.Context,
 	fsys apkfs.FullFS, di buildImplementation, o *options.Options, ic *types.ImageConfiguration,
 	s6context *s6.Context,
 ) error {
@@ -298,7 +301,7 @@ func buildImage(
 		return fmt.Errorf("initializing apk: %w", err)
 	}
 
-	if err := di.InstallPackages(fsys, o, ic); err != nil {
+	if err := di.InstallPackages(ctx, fsys, o, ic); err != nil {
 		return fmt.Errorf("installing apk packages: %w", err)
 	}
 

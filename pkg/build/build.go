@@ -18,6 +18,7 @@ package build
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"hash"
@@ -111,9 +112,9 @@ func (bc *Context) GetBuildDateEpoch() (time.Time, error) {
 	return bde, nil
 }
 
-func (bc *Context) BuildImage() (fs.FS, error) {
+func (bc *Context) BuildImage(ctx context.Context) (fs.FS, error) {
 	// TODO(puerco): Point to final interface (see comment on buildImage fn)
-	if err := buildImage(bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration, bc.s6); err != nil {
+	if err := buildImage(ctx, bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration, bc.s6); err != nil {
 		logger := bc.Options.Logger()
 		logger.Debugf("buildImage failed: %v", err)
 		b, err2 := yaml.Marshal(bc.ImageConfiguration)
@@ -143,11 +144,11 @@ func (bc *Context) Logger() log.Logger {
 // and sets everything up in the directory. Then
 // packages it all up into a standard OCI image layer
 // tar.gz file.
-func (bc *Context) BuildLayer() (string, v1.Layer, error) {
+func (bc *Context) BuildLayer(ctx context.Context) (string, v1.Layer, error) {
 	bc.Summarize()
 
 	// build image filesystem
-	if _, err := bc.BuildImage(); err != nil {
+	if _, err := bc.BuildImage(ctx); err != nil {
 		return "", nil, err
 	}
 

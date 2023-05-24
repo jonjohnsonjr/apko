@@ -18,6 +18,7 @@ package apk
 
 import (
 	"archive/tar"
+	"context"
 	"fmt"
 	"io/fs"
 	"regexp"
@@ -111,9 +112,9 @@ func (a *APK) Initialize(ic *types.ImageConfiguration) error {
 }
 
 // Install install packages. Only works if already initialized.
-func (a *APK) Install() error {
+func (a *APK) Install(ctx context.Context) error {
 	// sync reality with desired apk world
-	return a.impl.FixateWorld(&a.Options.SourceDateEpoch)
+	return a.impl.FixateWorld(ctx, &a.Options.SourceDateEpoch)
 }
 
 // ResolvePackages gets list of packages that should be installed

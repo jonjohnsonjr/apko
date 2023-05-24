@@ -231,7 +231,7 @@ func BuildCmd(ctx context.Context, imageRef, outputTarGZ string, archs []types.A
 				return fmt.Errorf("failed to update build context for %q: %w", arch, err)
 			}
 
-			layerTarGZ, layer, err := bc.BuildLayer()
+			layerTarGZ, layer, err := bc.BuildLayer(ctx)
 			if err != nil {
 				return fmt.Errorf("failed to build layer image: %w", err)
 			}
