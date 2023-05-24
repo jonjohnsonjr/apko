@@ -19,17 +19,13 @@ import (
 	"os"
 	"path/filepath"
 
-	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
-	"golang.org/x/sync/errgroup"
-
 	"chainguard.dev/apko/pkg/build/types"
-	"chainguard.dev/apko/pkg/options"
 	"chainguard.dev/apko/pkg/passwd"
+	"golang.org/x/sync/errgroup"
 )
 
-func (di *defaultBuildImplementation) appendGroup(
-	o *options.Options, groups []passwd.GroupEntry, group types.Group,
-) []passwd.GroupEntry {
+func (bc *Context) appendGroup(groups []passwd.GroupEntry, group types.Group) []passwd.GroupEntry {
+	o := bc.Options
 	o.Logger().Printf("creating group %d(%s)", group.GID, group.GroupName)
 
 	ge := passwd.GroupEntry{
@@ -57,9 +53,9 @@ func userToUserEntry(user types.User) passwd.UserEntry {
 	}
 }
 
-func (di *defaultBuildImplementation) MutateAccounts(
-	fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration,
-) error {
+func (bc *Context) MutateAccounts() error {
+	fsys, ic := bc.fs, bc.ImageConfiguration
+
 	var eg errgroup.Group
 
 	if len(ic.Accounts.Groups) != 0 {
@@ -72,15 +68,11 @@ func (di *defaultBuildImplementation) MutateAccounts(
 				return err
 			}
 
-			for _, g := range ic.Accounts.Groups {
-				gf.Entries = di.appendGroup(o, gf.Entries, g)
+			for _, group := range ic.Accounts.Groups {
+				gf.Entries = bc.appendGroup(gf.Entries, group)
 			}
 
-			if err := gf.WriteFile(fsys, path); err != nil {
-				return err
-			}
-
-			return nil
+			return gf.WriteFile(fsys, path)
 		})
 	}
 
@@ -149,9 +141,5 @@ func (di *defaultBuildImplementation) MutateAccounts(
 		return nil
 	})
 
-	if err := eg.Wait(); err != nil {
-		return err
-	}
-
-	return nil
+	return eg.Wait()
 }

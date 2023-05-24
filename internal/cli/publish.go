@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 
+	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 	"github.com/google/go-containerregistry/pkg/name"
 	coci "github.com/sigstore/cosign/v2/pkg/oci"
 	"github.com/spf13/cobra"
@@ -92,8 +93,18 @@ in a keychain.`,
 			if err != nil {
 				return fmt.Errorf("parsing annotations from command line: %w", err)
 			}
-			if err := PublishCmd(cmd.Context(), imageRefs, archs,
+
+			wd, err := os.MkdirTemp("", "apko-*")
+			if err != nil {
+				return fmt.Errorf("failed to create working directory: %w", err)
+			}
+			defer os.RemoveAll(wd)
+
+			fs := apkfs.DirFS(wd, apkfs.WithCreateDir())
+
+			if err := PublishCmd(cmd.Context(), fs, imageRefs, archs,
 				build.WithConfig(args[0]),
+				build.WithWorkDir(wd),
 				build.WithDockerMediatypes(useDockerMediaTypes),
 				build.WithTags(args[1:]...),
 				build.WithBuildDate(buildDate),
@@ -145,14 +156,8 @@ in a keychain.`,
 	return cmd
 }
 
-func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architecture, opts ...build.Option) error {
-	wd, err := os.MkdirTemp("", "apko-*")
-	if err != nil {
-		return fmt.Errorf("failed to create working directory: %w", err)
-	}
-	defer os.RemoveAll(wd)
-
-	bc, err := build.New(wd, opts...)
+func PublishCmd(ctx context.Context, fs apkfs.FullFS, outputRefs string, archs []types.Architecture, opts ...build.Option) error {
+	bc, err := build.New(fs, opts...)
 	if err != nil {
 		return err
 	}
@@ -216,7 +221,10 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 		arch := arch
 		// working directory for this architecture
 		wd := filepath.Join(workDir, arch.ToAPK())
-		bc, err := build.New(wd, opts...)
+		fs := apkfs.DirFS(wd, apkfs.WithCreateDir())
+		opts := append([]build.Option{build.WithWorkDir(wd)}, opts...)
+
+		bc, err := build.New(fs, opts...)
 		if err != nil {
 			return err
 		}

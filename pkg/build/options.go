@@ -245,3 +245,11 @@ func WithBuildOptions(buildOptions []string) Option {
 		return nil
 	}
 }
+
+// WithWorkDir sets the WorkDir.
+func WithWorkDir(wd string) Option {
+	return func(bc *Context) error {
+		bc.Options.WorkDir = wd
+		return nil
+	}
+}
