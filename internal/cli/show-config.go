@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 
+	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
@@ -40,8 +41,18 @@ The derived configuration is rendered in YAML.
 		Example: `  apko show-config <config.yaml>`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			wd, err := os.MkdirTemp("", "apko-*")
+			if err != nil {
+				return fmt.Errorf("failed to create working directory: %w", err)
+			}
+			defer os.RemoveAll(wd)
+
+			fs := apkfs.DirFS(wd, apkfs.WithCreateDir())
+
 			return ShowConfigCmd(cmd.Context(),
+				fs,
 				build.WithConfig(args[0]),
+				build.WithWorkDir(wd),
 				build.WithAssertions(build.RequireGroupFile(true), build.RequirePasswdFile(true)),
 				build.WithExtraKeys(extraKeys),
 				build.WithExtraRepos(extraRepos),
@@ -55,14 +66,8 @@ The derived configuration is rendered in YAML.
 	return cmd
 }
 
-func ShowConfigCmd(ctx context.Context, opts ...build.Option) error {
-	wd, err := os.MkdirTemp("", "apko-*")
-	if err != nil {
-		return fmt.Errorf("failed to create working directory: %w", err)
-	}
-	defer os.RemoveAll(wd)
-
-	bc, err := build.New(wd, opts...)
+func ShowConfigCmd(ctx context.Context, fs apkfs.FullFS, opts ...build.Option) error {
+	bc, err := build.New(fs, opts...)
 	if err != nil {
 		return err
 	}

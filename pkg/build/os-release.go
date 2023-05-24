@@ -23,12 +23,9 @@ import (
 	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 
 	"chainguard.dev/apko/pkg/build/types"
-	"chainguard.dev/apko/pkg/options"
 )
 
-func maybeGenerateVendorReleaseFile(
-	fsys apkfs.FullFS, ic *types.ImageConfiguration,
-) error {
+func maybeGenerateVendorReleaseFile(fsys apkfs.FullFS, ic *types.ImageConfiguration) error {
 	if ic.OSRelease.ID == "" || ic.OSRelease.VersionID == "" {
 		return nil
 	}
@@ -47,20 +44,16 @@ func maybeGenerateVendorReleaseFile(
 	defer w.Close()
 
 	_, err = fmt.Fprintf(w, "%s\n", ic.OSRelease.VersionID)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
-func (di *defaultBuildImplementation) GenerateOSRelease(
-	fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration,
-) error {
+func (bc *Context) GenerateOSRelease() error {
+	o, ic := bc.Options, bc.ImageConfiguration
+
 	path := filepath.Join("etc", "os-release")
 
 	osReleaseExists := true
-	if _, err := fsys.Stat(path); err != nil {
+	if _, err := bc.fs.Stat(path); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -75,7 +68,7 @@ func (di *defaultBuildImplementation) GenerateOSRelease(
 		return ErrOSReleaseAlreadyPresent
 	}
 
-	w, err := fsys.Create(path)
+	w, err := bc.fs.Create(path)
 	if err != nil {
 		return err
 	}
@@ -123,9 +116,5 @@ func (di *defaultBuildImplementation) GenerateOSRelease(
 		}
 	}
 
-	if err := maybeGenerateVendorReleaseFile(fsys, ic); err != nil {
-		return err
-	}
-
-	return nil
+	return maybeGenerateVendorReleaseFile(bc.fs, &bc.ImageConfiguration)
 }

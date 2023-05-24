@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 
+	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 	"github.com/spf13/cobra"
 
 	"chainguard.dev/apko/pkg/build"
@@ -41,8 +42,17 @@ The result is similar to the first stages of a build, but does not actuall insta
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			archs := types.ParseArchitectures(archstrs)
-			return ShowPackagesCmd(cmd.Context(), archs,
+			wd, err := os.MkdirTemp("", "apko-*")
+			if err != nil {
+				return fmt.Errorf("failed to create working directory: %w", err)
+			}
+			defer os.RemoveAll(wd)
+
+			fs := apkfs.DirFS(wd, apkfs.WithCreateDir())
+
+			return ShowPackagesCmd(cmd.Context(), fs, archs,
 				build.WithConfig(args[0]),
+				build.WithWorkDir(wd),
 				build.WithExtraKeys(extraKeys),
 				build.WithExtraRepos(extraRepos),
 			)
@@ -56,14 +66,8 @@ The result is similar to the first stages of a build, but does not actuall insta
 	return cmd
 }
 
-func ShowPackagesCmd(ctx context.Context, archs []types.Architecture, opts ...build.Option) error {
-	wd, err := os.MkdirTemp("", "apko-*")
-	if err != nil {
-		return fmt.Errorf("failed to create working directory: %w", err)
-	}
-	defer os.RemoveAll(wd)
-
-	bc, err := build.New(wd, opts...)
+func ShowPackagesCmd(ctx context.Context, fs apkfs.FullFS, archs []types.Architecture, opts ...build.Option) error {
+	bc, err := build.New(fs, opts...)
 	if err != nil {
 		return err
 	}
@@ -101,9 +105,13 @@ func ShowPackagesCmd(ctx context.Context, archs []types.Architecture, opts ...bu
 
 	for _, arch := range archs {
 		arch := arch
+
 		// working directory for this architecture
 		wd := filepath.Join(workDir, arch.ToAPK())
-		bc, err := build.New(wd, opts...)
+		fs := apkfs.DirFS(wd, apkfs.WithCreateDir())
+		opts := append([]build.Option{build.WithWorkDir(wd)}, opts...)
+
+		bc, err := build.New(fs, opts...)
 		if err != nil {
 			return err
 		}

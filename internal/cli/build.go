@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 
+	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 	"github.com/google/go-containerregistry/pkg/name"
 	coci "github.com/sigstore/cosign/v2/pkg/oci"
 	"github.com/sirupsen/logrus"
@@ -88,11 +89,20 @@ bill of materials) describing the image contents.
 				return fmt.Errorf("parsing annotations from command line: %w", err)
 			}
 
+			wd, err := os.MkdirTemp("", "apko-*")
+			if err != nil {
+				return fmt.Errorf("failed to create working directory: %w", err)
+			}
+			defer os.RemoveAll(wd)
+
+			fs := apkfs.DirFS(wd, apkfs.WithCreateDir())
+
 			if !writeSBOM {
 				sbomFormats = []string{}
 			}
-			return BuildCmd(cmd.Context(), args[1], args[2], archs,
+			return BuildCmd(cmd.Context(), fs, args[1], args[2], archs,
 				build.WithConfig(args[0]),
+				build.WithWorkDir(wd),
 				build.WithDockerMediatypes(useDockerMediaTypes),
 				build.WithBuildDate(buildDate),
 				build.WithAssertions(build.RequireGroupFile(true), build.RequirePasswdFile(true)),
@@ -128,14 +138,8 @@ bill of materials) describing the image contents.
 	return cmd
 }
 
-func BuildCmd(ctx context.Context, imageRef, outputTarGZ string, archs []types.Architecture, opts ...build.Option) error {
-	wd, err := os.MkdirTemp("", "apko-*")
-	if err != nil {
-		return fmt.Errorf("failed to create working directory: %w", err)
-	}
-	defer os.RemoveAll(wd)
-
-	bc, err := build.New(wd, opts...)
+func BuildCmd(ctx context.Context, fs apkfs.FullFS, imageRef, outputTarGZ string, archs []types.Architecture, opts ...build.Option) error {
+	bc, err := build.New(fs, opts...)
 	if err != nil {
 		return err
 	}
@@ -208,9 +212,13 @@ func BuildCmd(ctx context.Context, imageRef, outputTarGZ string, archs []types.A
 
 	for _, arch := range archs {
 		arch := arch
+
 		// working directory for this architecture
 		wd := filepath.Join(workDir, arch.ToAPK())
-		bc, err := build.New(wd, opts...)
+		fs := apkfs.DirFS(wd, apkfs.WithCreateDir())
+		opts := append([]build.Option{build.WithWorkDir(wd)}, opts...)
+
+		bc, err := build.New(fs, opts...)
 		if err != nil {
 			return err
 		}

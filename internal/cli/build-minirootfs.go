@@ -26,6 +26,8 @@ import (
 	"chainguard.dev/apko/pkg/build/types"
 	"chainguard.dev/apko/pkg/iocomb"
 	"chainguard.dev/apko/pkg/log"
+
+	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 )
 
 func buildMinirootFS() *cobra.Command {
@@ -57,8 +59,18 @@ func buildMinirootFS() *cobra.Command {
 			}
 			logger := log.NewLogger(logWriter)
 
+			wd, err := os.MkdirTemp("", "apko-*")
+			if err != nil {
+				return fmt.Errorf("failed to create working directory: %w", err)
+			}
+			defer os.RemoveAll(wd)
+
+			fs := apkfs.DirFS(wd, apkfs.WithCreateDir())
+
 			return BuildMinirootFSCmd(cmd.Context(),
+				fs,
 				build.WithConfig(args[0]),
+				build.WithWorkDir(wd),
 				build.WithTarball(args[1]),
 				build.WithBuildDate(buildDate),
 				build.WithSBOM(sbomPath),
@@ -79,14 +91,8 @@ func buildMinirootFS() *cobra.Command {
 	return cmd
 }
 
-func BuildMinirootFSCmd(ctx context.Context, opts ...build.Option) error {
-	wd, err := os.MkdirTemp("", "apko-*")
-	if err != nil {
-		return fmt.Errorf("failed to create working directory: %w", err)
-	}
-	defer os.RemoveAll(wd)
-
-	bc, err := build.New(wd, opts...)
+func BuildMinirootFSCmd(ctx context.Context, fs apkfs.FullFS, opts ...build.Option) error {
+	bc, err := build.New(fs, opts...)
 	if err != nil {
 		return err
 	}

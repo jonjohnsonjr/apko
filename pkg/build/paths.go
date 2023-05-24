@@ -79,11 +79,7 @@ func ensureParentDirectory(fsys apkfs.FullFS, mut types.PathMutation) error {
 	target := mut.Path
 	parent := filepath.Dir(target)
 
-	if err := fsys.MkdirAll(parent, 0755); err != nil {
-		return err
-	}
-
-	return nil
+	return fsys.MkdirAll(parent, 0755)
 }
 
 func mutateEmptyFile(fsys apkfs.FullFS, o *options.Options, mut types.PathMutation) error {
@@ -117,11 +113,7 @@ func mutateHardLink(fsys apkfs.FullFS, o *options.Options, mut types.PathMutatio
 		}
 	}
 
-	if err := fsys.Link(source, target); err != nil {
-		return err
-	}
-
-	return nil
+	return fsys.Link(source, target)
 }
 
 func mutateSymLink(fsys apkfs.FullFS, o *options.Options, mut types.PathMutation) error {
@@ -131,16 +123,12 @@ func mutateSymLink(fsys apkfs.FullFS, o *options.Options, mut types.PathMutation
 		return err
 	}
 
-	if err := fsys.Symlink(mut.Source, target); err != nil {
-		return err
-	}
-
-	return nil
+	return fsys.Symlink(mut.Source, target)
 }
 
-func (di *defaultBuildImplementation) MutatePaths(
-	fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration,
-) error {
+func (bc *Context) MutatePaths() error {
+	fsys, o, ic := bc.fs, &bc.Options, bc.ImageConfiguration
+
 	for _, mut := range ic.Paths {
 		pm, ok := pathMutators[mut.Type]
 		if !ok {
