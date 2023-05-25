@@ -315,7 +315,7 @@ func attachSBOM(
 	return si, nil
 }
 
-func BuildImageTarballFromLayer(ctx context.Context, imageRef string, layer v1.Layer, outputTarGZ string, ic types.ImageConfiguration, logger log.Logger, remoteOpts []remote.Option, opts options.Options) error {
+func BuildImageTarballFromLayer(ctx context.Context, imageRef string, layer v1.Layer, outputTarGZ string, ic types.ImageConfiguration, logger log.Logger, opts options.Options) error {
 	v1Image, err := buildImageFromLayer(ctx, layer, ic, opts.SourceDateEpoch, opts.Arch, logger, opts.SBOMPath, opts.SBOMFormats)
 	if err != nil {
 		return err
