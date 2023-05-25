@@ -16,7 +16,6 @@ package options
 
 import (
 	"fmt"
-	"io/fs"
 	"net/url"
 	"path/filepath"
 	"sort"
@@ -36,20 +35,11 @@ type Options struct {
 
 	ImageInfo ImageInfo
 
-	// Working directory,inherited from build context
-	FS fs.FS
-
 	// The reference of the generated image. Used for naming and purls
 	ImageReference string
 
 	// OutputDir is the directory where the sboms will be written
 	OutputDir string
-
-	// FileName is the base name for the sboms, the proper extension will get appended
-	FileName string
-
-	// Formats dictates which SBOM formats we will output
-	Formats []string
 
 	// Packages is alist of packages which will be listed in the SBOM
 	Packages []*repository.Package
@@ -188,4 +178,8 @@ func (o *Options) ArchImagePurlQualifiers(aii *ArchImageInfo) PurlQualifiers {
 		qualifiers["mediaType"] = ""
 	}
 	return qualifiers
+}
+
+func (o *Options) FileName(ext string) string {
+	return fmt.Sprintf("sbom-%s.%s", o.ImageInfo.Arch.ToAPK(), ext)
 }

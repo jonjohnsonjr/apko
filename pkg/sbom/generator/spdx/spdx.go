@@ -42,16 +42,10 @@ const (
 	apkSBOMdir           = "/var/lib/db/sbom"
 )
 
-type SPDX struct {
-	fs apkfs.FullFS
-}
+type SPDX struct{}
 
-func New(fs apkfs.FullFS) SPDX {
-	return SPDX{fs}
-}
-
-func (sx *SPDX) Key() string {
-	return "spdx"
+func New() *SPDX {
+	return &SPDX{}
 }
 
 func (sx *SPDX) Ext() string {
@@ -71,7 +65,7 @@ func stringToIdentifier(in string) (out string) {
 }
 
 // Generate writes an SPDX SBOM in path
-func (sx *SPDX) Generate(opts *options.Options, path string) error {
+func (sx *SPDX) Generate(fsys apkfs.FullFS, opts options.Options, path string) error {
 	// The default document name makes no attempt to avoid
 	// clashes. Ensuring a unique name requires a digest
 	documentName := "sbom"
@@ -141,7 +135,7 @@ func (sx *SPDX) Generate(opts *options.Options, path string) error {
 		})
 
 		// Check to see if the apk contains an sbom describing itself
-		if err := sx.ProcessInternalApkSBOM(opts, doc, &p); err != nil {
+		if err := sx.ProcessInternalApkSBOM(fsys, opts, doc, &p); err != nil {
 			return fmt.Errorf("parsing internal apk SBOM: %w", err)
 		}
 	}
@@ -211,9 +205,9 @@ func locateApkSBOM(fsys apkfs.FullFS, p *Package) (string, error) {
 	return "", nil
 }
 
-func (sx *SPDX) ProcessInternalApkSBOM(opts *options.Options, doc *Document, p *Package) error {
+func (sx *SPDX) ProcessInternalApkSBOM(fsys apkfs.FullFS, opts options.Options, doc *Document, p *Package) error {
 	// Check if apk installed an SBOM
-	path, err := locateApkSBOM(sx.fs, p)
+	path, err := locateApkSBOM(fsys, p)
 	if err != nil {
 		return fmt.Errorf("inspecting FS for internal apk SBOM: %w", err)
 	}
@@ -223,7 +217,7 @@ func (sx *SPDX) ProcessInternalApkSBOM(opts *options.Options, doc *Document, p *
 
 	// TODO: Logf("composing packages from %s into image SBOM", path)
 
-	internalDoc, err := sx.ParseInternalSBOM(opts, path)
+	internalDoc, err := sx.ParseInternalSBOM(fsys, opts, path)
 	if err != nil {
 		// TODO: Log error parsing apk SBOM
 		return nil
@@ -310,9 +304,9 @@ func copySBOMElement(spdxid string, sourceDoc, targetDoc *Document, copiedElemen
 }
 
 // ParseInternalSBOM opens an SBOM inside apks and
-func (sx *SPDX) ParseInternalSBOM(opts *options.Options, path string) (*Document, error) {
+func (sx *SPDX) ParseInternalSBOM(fsys apkfs.FullFS, opts options.Options, path string) (*Document, error) {
 	internalSBOM := &Document{}
-	data, err := sx.fs.ReadFile(path)
+	data, err := fsys.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening sbom file %s: %w", path, err)
 	}
@@ -341,7 +335,7 @@ func renderDoc(doc *Document, path string) error {
 	return nil
 }
 
-func (sx *SPDX) imagePackage(opts *options.Options) (p *Package) {
+func (sx *SPDX) imagePackage(opts options.Options) (p *Package) {
 	return &Package{
 		ID: stringToIdentifier(fmt.Sprintf(
 			"SPDXRef-Package-%s", opts.ImageInfo.ImageDigest,
@@ -371,7 +365,7 @@ func (sx *SPDX) imagePackage(opts *options.Options) (p *Package) {
 }
 
 // apkPackage returns a SPDX package describing an apk
-func (sx *SPDX) apkPackage(opts *options.Options, pkg *repository.Package) Package {
+func (sx *SPDX) apkPackage(opts options.Options, pkg *repository.Package) Package {
 	return Package{
 		ID: stringToIdentifier(fmt.Sprintf(
 			"SPDXRef-Package-%s-%s", pkg.Name, pkg.Version,
@@ -405,7 +399,7 @@ func (sx *SPDX) apkPackage(opts *options.Options, pkg *repository.Package) Packa
 }
 
 // LayerPackage returns a package describing the layer
-func (sx *SPDX) layerPackage(opts *options.Options) *Package {
+func (sx *SPDX) layerPackage(opts options.Options) *Package {
 	layerPackageName := opts.ImageInfo.LayerDigest
 	mainPkgID := stringToIdentifier(layerPackageName)
 
@@ -511,7 +505,7 @@ type Relationship struct {
 	Related string `json:"relatedSpdxElement"`
 }
 
-func (sx *SPDX) GenerateIndex(opts *options.Options, path string) error {
+func (sx *SPDX) GenerateIndex(fsys apkfs.FullFS, opts options.Options, path string) error {
 	if opts.ImageInfo.Images == nil || len(opts.ImageInfo.Images) == 0 {
 		return errors.New("unable to render index sbom, no architecture images found")
 	}

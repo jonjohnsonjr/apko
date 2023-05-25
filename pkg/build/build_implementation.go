@@ -21,7 +21,6 @@ import (
 	"path/filepath"
 	"runtime"
 
-	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 	"github.com/chainguard-dev/go-apk/pkg/tarball"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -32,9 +31,9 @@ import (
 	chainguardAPK "chainguard.dev/apko/pkg/apk"
 	"chainguard.dev/apko/pkg/build/types"
 	"chainguard.dev/apko/pkg/exec"
-	"chainguard.dev/apko/pkg/options"
 	"chainguard.dev/apko/pkg/s6"
 	"chainguard.dev/apko/pkg/sbom"
+	"chainguard.dev/apko/pkg/sbom/generator"
 	soptions "chainguard.dev/apko/pkg/sbom/options"
 )
 
@@ -96,73 +95,100 @@ func (bc *Context) BuildTarball() (string, error) {
 	return outfile.Name(), nil
 }
 
-func (bc *Context) GenerateImageSBOM(arch types.Architecture, img coci.SignedImage) error {
-	fsys, o, ic := bc.fs, bc.Options, bc.ImageConfiguration
-	o.Arch = arch
-
-	if len(o.SBOMFormats) == 0 {
-		o.Logger().Warnf("skipping SBOM generation")
-		return nil
+func (bc *Context) GenerateImageSBOM(arch types.Architecture, img coci.SignedImage) ([]string, error) {
+	if len(bc.Options.SBOMFormats) == 0 {
+		bc.Options.Logger().Warnf("skipping SBOM generation")
+		return nil, nil
 	}
 
-	s := newSBOM(fsys, &o, &ic)
-
-	if err := s.ReadLayerTarball(o.TarballPath); err != nil {
-		return fmt.Errorf("reading layer tar: %w", err)
+	layerDigest, err := sbom.ReadLayerTarball(bc.Options.TarballPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading layer tar: %w", err)
 	}
 
-	if err := s.ReadReleaseData(); err != nil {
-		return fmt.Errorf("getting os-release: %w", err)
+	osd, err := sbom.ReadReleaseData(bc.fs)
+	if err != nil {
+		return nil, fmt.Errorf("getting os-release: %w", err)
 	}
 
-	if err := s.ReadPackageIndex(); err != nil {
-		return fmt.Errorf("getting installed packages from sbom: %w", err)
+	pkgs, err := sbom.ReadPackageIndex(bc.fs)
+	if err != nil {
+		return nil, fmt.Errorf("getting installed packages from sbom: %w", err)
 	}
 
 	// Get the image digest
 	h, err := img.Digest()
 	if err != nil {
-		return fmt.Errorf("getting %s image digest: %w", o.Arch, err)
+		return nil, fmt.Errorf("getting %s image digest: %w", bc.Options.Arch, err)
 	}
 
-	s.Options.ImageInfo.ImageDigest = h.String()
-	s.Options.ImageInfo.Arch = o.Arch
+	sopt := bc.sbopt()
+	sopt.ImageInfo.LayerDigest = layerDigest.String()
+	sopt.ImageInfo.ImageDigest = h.String()
+	sopt.ImageInfo.Arch = arch
+	sopt.OS.Name = osd.Name
+	sopt.OS.ID = osd.ID
+	sopt.OS.Version = osd.Version
+	sopt.Packages = pkgs
 
-	if _, err := s.Generate(); err != nil {
-		return fmt.Errorf("generating SBOMs: %w", err)
+	files := []string{}
+	for _, format := range bc.Options.SBOMFormats {
+		gen, ok := generator.Generators[format]
+		if !ok {
+			return nil, fmt.Errorf("no sbom generator for format %s", format)
+		}
+		path := filepath.Join(sopt.OutputDir, sopt.FileName(gen.Ext()))
+		if err := gen.Generate(bc.fs, *sopt, path); err != nil {
+			return nil, fmt.Errorf("generating %s sbom: %w", format, err)
+		}
+		files = append(files, path)
 	}
 
-	return nil
+	return files, nil
 }
 
-func (bc *Context) GenerateSBOM() error {
-	fsys, o, ic := bc.fs, bc.Options, bc.ImageConfiguration
-	if len(o.SBOMFormats) == 0 {
-		o.Logger().Warnf("skipping SBOM generation")
-		return nil
+func (bc *Context) GenerateLayerSBOM(path string) ([]string, error) {
+	if len(bc.Options.SBOMFormats) == 0 {
+		bc.Options.Logger().Warnf("skipping index SBOM generation")
+		return nil, nil
 	}
 
-	s := newSBOM(fsys, &o, &ic)
-
-	if err := s.ReadLayerTarball(o.TarballPath); err != nil {
-		return fmt.Errorf("reading layer tar: %w", err)
+	layerDigest, err := sbom.ReadLayerTarball(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading layer tar: %w", err)
 	}
 
-	if err := s.ReadReleaseData(); err != nil {
-		return fmt.Errorf("getting os-release: %w", err)
+	osd, err := sbom.ReadReleaseData(bc.fs)
+	if err != nil {
+		return nil, fmt.Errorf("getting os-release: %w", err)
 	}
 
-	if err := s.ReadPackageIndex(); err != nil {
-		return fmt.Errorf("getting installed packages from sbom: %w", err)
+	pkgs, err := sbom.ReadPackageIndex(bc.fs)
+	if err != nil {
+		return nil, fmt.Errorf("getting installed packages from sbom: %w", err)
 	}
 
-	s.Options.ImageInfo.Arch = o.Arch
+	sopt := bc.sbopt()
+	sopt.ImageInfo.LayerDigest = layerDigest.String()
+	sopt.OS.Name = osd.Name
+	sopt.OS.ID = osd.ID
+	sopt.OS.Version = osd.Version
+	sopt.Packages = pkgs
 
-	if _, err := s.Generate(); err != nil {
-		return fmt.Errorf("generating SBOMs: %w", err)
+	files := []string{}
+	for _, format := range bc.Options.SBOMFormats {
+		gen, ok := generator.Generators[format]
+		if !ok {
+			return nil, fmt.Errorf("no sbom generator for format %s", format)
+		}
+		path := filepath.Join(sopt.OutputDir, sopt.FileName(gen.Ext()))
+		if err := gen.Generate(bc.fs, *sopt, path); err != nil {
+			return nil, fmt.Errorf("generating %s sbom: %w", format, err)
+		}
+		files = append(files, path)
 	}
 
-	return nil
+	return files, nil
 }
 
 func (bc *Context) buildImage() error {
@@ -232,92 +258,99 @@ func (bc *Context) buildImage() error {
 
 }
 
-func newSBOM(fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration) *sbom.SBOM {
-	s := sbom.NewWithFS(fsys, o.Arch)
+func (bc *Context) sbopt() *soptions.Options {
+	o, ic := bc.Options, bc.ImageConfiguration
+
+	sopt := sbom.DefaultOptions()
 	// Parse the image reference
 	if len(o.Tags) > 0 {
 		tag, err := name.NewTag(o.Tags[0])
 		if err == nil {
-			s.Options.ImageInfo.Tag = tag.TagStr()
-			s.Options.ImageInfo.Name = tag.String()
+			sopt.ImageInfo.Tag = tag.TagStr()
+			sopt.ImageInfo.Name = tag.String()
 		} else {
 			o.Logger().Errorf("%s parsing tag %s, ignoring", o.Tags[0], err)
 		}
 	}
 
-	s.Options.ImageInfo.SourceDateEpoch = o.SourceDateEpoch
-	s.Options.Formats = o.SBOMFormats
-	s.Options.ImageInfo.VCSUrl = ic.VCSUrl
+	sopt.ImageInfo.SourceDateEpoch = o.SourceDateEpoch
+	sopt.ImageInfo.VCSUrl = ic.VCSUrl
 
 	if o.UseDockerMediaTypes {
-		s.Options.ImageInfo.ImageMediaType = ggcrtypes.DockerManifestSchema2
+		sopt.ImageInfo.ImageMediaType = ggcrtypes.DockerManifestSchema2
 	} else {
-		s.Options.ImageInfo.ImageMediaType = ggcrtypes.OCIManifestSchema1
+		sopt.ImageInfo.ImageMediaType = ggcrtypes.OCIManifestSchema1
 	}
 
-	s.Options.OutputDir = o.TempDir()
+	sopt.OutputDir = o.TempDir()
 	if o.SBOMPath != "" {
-		s.Options.OutputDir = o.SBOMPath
+		sopt.OutputDir = o.SBOMPath
 	}
 
-	return s
+	return sopt
 }
 
-func (bc *Context) GenerateIndexSBOM(indexDigest name.Digest, imgs map[types.Architecture]coci.SignedImage) error {
+func (bc *Context) GenerateIndexSBOM(indexDigest name.Digest, imgs map[types.Architecture]coci.SignedImage) ([]string, error) {
 	o := bc.Options
 	if len(o.SBOMFormats) == 0 {
 		o.Logger().Warnf("skipping index SBOM generation")
-		return nil
+		return nil, nil
 	}
 
-	s := newSBOM(bc.fs, &o, &bc.ImageConfiguration)
+	sopt := bc.sbopt()
 	o.Logger().Infof("Generating index SBOM")
 
 	// Add the image digest
 	h, err := v1.NewHash(indexDigest.DigestStr())
 	if err != nil {
-		return errors.New("getting index hash")
+		return nil, errors.New("getting index hash")
 	}
-	s.Options.ImageInfo.IndexDigest = h
+	sopt.ImageInfo.IndexDigest = h
 
-	s.Options.ImageInfo.IndexMediaType = ggcrtypes.OCIImageIndex
+	sopt.ImageInfo.IndexMediaType = ggcrtypes.OCIImageIndex
 	if o.UseDockerMediaTypes {
-		s.Options.ImageInfo.IndexMediaType = ggcrtypes.DockerManifestList
-	}
-	var ext string
-	switch o.SBOMFormats[0] {
-	case "spdx":
-		ext = "spdx.json"
-	case "cyclonedx":
-		ext = "cdx"
-	case "idb":
-		ext = "idb"
+		sopt.ImageInfo.IndexMediaType = ggcrtypes.DockerManifestList
 	}
 
-	// Load the images data into the SBOM generator options
-	for arch, i := range imgs {
-		sbomHash, err := hash.SHA256ForFile(filepath.Join(s.Options.OutputDir, fmt.Sprintf("sbom-%s.%s", arch.ToAPK(), ext)))
-		if err != nil {
-			return fmt.Errorf("checksumming %s SBOM: %w", arch, err)
+	sboms := []string{}
+	for _, format := range o.SBOMFormats {
+		gen, ok := generator.Generators[format]
+		if !ok {
+			return nil, fmt.Errorf("no sbom generator for format %s", format)
 		}
 
-		d, err := i.Digest()
-		if err != nil {
-			return fmt.Errorf("getting arch image digest: %w", err)
+		// Load the images data into the SBOM generator options
+		for arch, i := range imgs {
+			// TODO(jonjohnsonjr): This is wrong, actually. Need to think about arch.
+			sbomHash, err := hash.SHA256ForFile(filepath.Join(sopt.OutputDir, sopt.FileName(gen.Ext())))
+			if err != nil {
+				return nil, fmt.Errorf("checksumming %s SBOM: %w", arch, err)
+			}
+
+			d, err := i.Digest()
+			if err != nil {
+				return nil, fmt.Errorf("getting arch image digest: %w", err)
+			}
+
+			sopt.ImageInfo.Images = append(
+				sopt.ImageInfo.Images,
+				soptions.ArchImageInfo{
+					Digest:     d,
+					Arch:       arch,
+					SBOMDigest: sbomHash,
+				})
 		}
 
-		s.Options.ImageInfo.Images = append(
-			s.Options.ImageInfo.Images,
-			soptions.ArchImageInfo{
-				Digest:     d,
-				Arch:       arch,
-				SBOMDigest: sbomHash,
-			})
+		// TODO(jonjohnsonjr): make image arch "index"?
+		// path := filepath.Join(opts.OutputDir, "sbom-index."+gen.Ext())
+		sopt.ImageInfo.Arch = "index"
+		path := filepath.Join(sopt.OutputDir, sopt.FileName(gen.Ext()))
+
+		if err := gen.GenerateIndex(bc.fs, *sopt, path); err != nil {
+			return nil, fmt.Errorf("generating %s index sbom: %w", format, err)
+		}
+		sboms = append(sboms, path)
 	}
 
-	if _, err := s.GenerateIndex(); err != nil {
-		return fmt.Errorf("generting index SBOM: %w", err)
-	}
-
-	return nil
+	return sboms, nil
 }

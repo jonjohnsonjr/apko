@@ -145,7 +145,7 @@ in a keychain.`,
 	cmd.Flags().StringVar(&sbomPath, "sbom-path", "", "path to write the SBOMs")
 	cmd.Flags().StringSliceVar(&archstrs, "arch", nil, "architectures to build for (e.g., x86_64,ppc64le,arm64) -- default is all, unless specified in config.")
 	cmd.Flags().StringSliceVarP(&extraKeys, "keyring-append", "k", []string{}, "path to extra keys to include in the keyring")
-	cmd.Flags().StringSliceVar(&sbomFormats, "sbom-formats", sbom.DefaultOptions.Formats, "SBOM formats to output")
+	cmd.Flags().StringSliceVar(&sbomFormats, "sbom-formats", sbom.DefaultFormats, "SBOM formats to output")
 	cmd.Flags().StringSliceVarP(&extraRepos, "repository-append", "r", []string{}, "path to extra repositories to include")
 	cmd.Flags().StringSliceVar(&buildOptions, "build-option", []string{}, "build options to enable")
 	cmd.Flags().StringSliceVar(&logPolicy, "log-policy", []string{}, "logging policy to use")
@@ -359,13 +359,11 @@ func PublishCmd(ctx context.Context, fs apkfs.FullFS, outputRefs string, archs [
 			bc.Options.SBOMPath = sbomPath
 
 			g.Go(func() error {
-				if err := bc.GenerateImageSBOM(arch, img); err != nil {
+				if _, err := bc.GenerateImageSBOM(arch, img); err != nil {
 					return fmt.Errorf("generating sbom for %s: %w", arch, err)
 				}
 
-				if _, err := oci.PostAttachSBOM(
-					ctx, img, sbomPath, bc.Options.SBOMFormats, arch, bc.Logger(), bc.Options.Tags...,
-				); err != nil {
+				if _, err := oci.PostAttachSBOM(ctx, img, sbomPath, bc.Options.SBOMFormats, arch, bc.Logger(), bc.Options.Tags...); err != nil {
 					return fmt.Errorf("attaching sboms to %s image: %w", arch, err)
 				}
 
@@ -377,14 +375,12 @@ func PublishCmd(ctx context.Context, fs apkfs.FullFS, outputRefs string, archs [
 			return err
 		}
 
-		if err := bc.GenerateIndexSBOM(finalDigest, imgs); err != nil {
+		if _, err := bc.GenerateIndexSBOM(finalDigest, imgs); err != nil {
 			return fmt.Errorf("generating index SBOM: %w", err)
 		}
 
 		if idx != nil {
-			if _, err := oci.PostAttachSBOM(
-				ctx, idx, sbomPath, bc.Options.SBOMFormats, types.Architecture(""), bc.Logger(), bc.Options.Tags...,
-			); err != nil {
+			if _, err := oci.PostAttachSBOM(ctx, idx, sbomPath, bc.Options.SBOMFormats, types.Architecture(""), bc.Logger(), bc.Options.Tags...); err != nil {
 				return fmt.Errorf("attaching sboms to index: %w", err)
 			}
 		}
@@ -429,9 +425,7 @@ func publishImage(ctx context.Context, bc *build.Context, layerTarGZ string, arc
 }
 
 // publishIndex publishes the new image index
-func publishIndex(ctx context.Context, bc *build.Context, imgs map[types.Architecture]coci.SignedImage) (
-	indexDigest name.Digest, idx coci.SignedImageIndex, err error,
-) {
+func publishIndex(ctx context.Context, bc *build.Context, imgs map[types.Architecture]coci.SignedImage) (indexDigest name.Digest, idx coci.SignedImageIndex, err error) {
 	shouldPushTags := bc.Options.StageTags == ""
 	if bc.Options.UseDockerMediaTypes {
 		indexDigest, idx, err = oci.PublishDockerIndex(ctx, bc.ImageConfiguration, imgs, bc.Options.Log, bc.Options.Local, shouldPushTags, bc.Options.Tags...)

@@ -26,16 +26,10 @@ import (
 	"chainguard.dev/apko/pkg/sbom/options"
 )
 
-type CycloneDX struct {
-	fs apkfs.FullFS
-}
+type CycloneDX struct{}
 
-func New(fs apkfs.FullFS) CycloneDX {
-	return CycloneDX{fs}
-}
-
-func (cdx *CycloneDX) Key() string {
-	return "cyclonedx"
+func New() *CycloneDX {
+	return &CycloneDX{}
 }
 
 func (cdx *CycloneDX) Ext() string {
@@ -43,7 +37,7 @@ func (cdx *CycloneDX) Ext() string {
 }
 
 // Generate writes a CycloneDX sbom in path
-func (cdx *CycloneDX) Generate(opts *options.Options, path string) error {
+func (cdx *CycloneDX) Generate(fsys apkfs.FullFS, opts options.Options, path string) error {
 	pkgComponents := []Component{}
 	pkgDependencies := []Dependency{}
 
@@ -213,7 +207,7 @@ type Hash struct {
 	Value     string        `json:"content"`
 }
 
-func (cdx *CycloneDX) GenerateIndex(opts *options.Options, path string) error {
+func (cdx *CycloneDX) GenerateIndex(fsys apkfs.FullFS, opts options.Options, path string) error {
 	purlString := purl.NewPackageURL(
 		purl.TypeOCI, "", opts.IndexPurlName(), opts.ImageInfo.IndexDigest.String(),
 		nil, "",
@@ -267,7 +261,7 @@ func (cdx *CycloneDX) GenerateIndex(opts *options.Options, path string) error {
 }
 
 // imageComponent takes an image and returns a component representing it
-func (cdx *CycloneDX) archImageComponent(opts *options.Options, info options.ArchImageInfo) Component {
+func (cdx *CycloneDX) archImageComponent(opts options.Options, info options.ArchImageInfo) Component {
 	purlString := purl.NewPackageURL(
 		purl.TypeOCI, "", opts.ImagePurlName(), info.Digest.DeepCopy().String(),
 		nil, "",

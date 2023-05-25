@@ -129,7 +129,7 @@ bill of materials) describing the image contents.
 	cmd.Flags().StringVar(&sbomPath, "sbom-path", "", "generate SBOMs in dir (defaults to image directory)")
 	cmd.Flags().StringSliceVar(&archstrs, "arch", nil, "architectures to build for (e.g., x86_64,ppc64le,arm64) -- default is all, unless specified in config. Can also use 'host' to indicate arch of host this is running on")
 	cmd.Flags().StringSliceVarP(&extraKeys, "keyring-append", "k", []string{}, "path to extra keys to include in the keyring")
-	cmd.Flags().StringSliceVar(&sbomFormats, "sbom-formats", sbom.DefaultOptions.Formats, "SBOM formats to output")
+	cmd.Flags().StringSliceVar(&sbomFormats, "sbom-formats", sbom.DefaultFormats, "SBOM formats to output")
 	cmd.Flags().StringSliceVarP(&extraRepos, "repository-append", "r", []string{}, "path to extra repositories to include")
 	cmd.Flags().StringSliceVar(&buildOptions, "build-option", []string{}, "build options to enable")
 	cmd.Flags().StringSliceVar(&logPolicy, "log-policy", []string{}, "logging policy to use")
@@ -289,7 +289,7 @@ func BuildCmd(ctx context.Context, fs apkfs.FullFS, imageRef, outputTarGZ string
 			bc.Options.SBOMPath = sbomPath
 
 			g.Go(func() error {
-				if err := bc.GenerateImageSBOM(arch, img); err != nil {
+				if _, err := bc.GenerateImageSBOM(arch, img); err != nil {
 					return fmt.Errorf("generating sbom for %s: %w", arch, err)
 				}
 				return nil
@@ -307,7 +307,7 @@ func BuildCmd(ctx context.Context, fs apkfs.FullFS, imageRef, outputTarGZ string
 		return fmt.Errorf("failed to build index: %w", err)
 	}
 	if wantSBOM {
-		if err := bc.GenerateIndexSBOM(finalDigest, imgs); err != nil {
+		if _, err := bc.GenerateIndexSBOM(finalDigest, imgs); err != nil {
 			return fmt.Errorf("generating index SBOM: %w", err)
 		}
 	}

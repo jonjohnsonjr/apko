@@ -147,15 +147,16 @@ func (bc *Context) ImageLayoutToLayer() (string, error) {
 		return "", err
 	}
 
-	layerTarGZ, err := bc.BuildTarball()
 	// build layer tarball
+	layerTarGZ, err := bc.BuildTarball()
 	if err != nil {
 		return "", err
 	}
 
 	// generate SBOM
 	if bc.Options.WantSBOM {
-		if err := bc.GenerateSBOM(); err != nil {
+		_, err := bc.GenerateLayerSBOM(bc.Options.TarballPath)
+		if err != nil {
 			return "", fmt.Errorf("generating SBOMs: %w", err)
 		}
 	} else {

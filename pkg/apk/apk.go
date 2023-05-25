@@ -133,8 +133,7 @@ func AdditionalTags(fsys fs.FS, opts options.Options) ([]string, error) {
 	if opts.PackageVersionTag == "" {
 		return nil, nil
 	}
-	dbPath := "lib/apk/db/installed"
-	pkgs, err := sbom.ReadPackageIndex(fsys, &sbom.DefaultOptions, dbPath)
+	pkgs, err := sbom.ReadPackageIndex(fsys)
 	if err != nil {
 		return nil, err
 	}
