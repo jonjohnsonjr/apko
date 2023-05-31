@@ -193,11 +193,11 @@ func (bc *Context) AdditionalTags() error {
 	return nil
 }
 
-// buildImage is a temporary function to make the fakes work.
+// buildFS is a temporary function to make the fakes work.
 // This function only installs everything onto a temporary filesystem.
 // A later stage should add things like busybox symlinks or ldconfig, etc.
 // after which it can be loaded into a tarball.
-func (bc *Context) buildImage() error {
+func (bc *Context) buildFS() error {
 	bc.Logger().Infof("building image fileystem in")
 
 	if err := bc.apk.Install(); err != nil {

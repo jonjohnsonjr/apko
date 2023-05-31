@@ -22,12 +22,17 @@ import (
 	"io/fs"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
-	v1types "github.com/google/go-containerregistry/pkg/v1/types"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/mutate"
+	ggcrtypes "github.com/google/go-containerregistry/pkg/v1/types"
+	"github.com/google/shlex"
 	"github.com/hashicorp/go-multierror"
 	"gopkg.in/yaml.v3"
 
@@ -82,10 +87,9 @@ func (bc *Context) GetBuildDateEpoch() (time.Time, error) {
 	return bde, nil
 }
 
-func (bc *Context) BuildImage() (fs.FS, error) {
-	// TODO(puerco): Point to final interface (see comment on buildImage fn)
-	if err := bc.buildImage(); err != nil {
-		bc.Logger().Debugf("buildImage failed: %v", err)
+func (bc *Context) BuildFS() (fs.FS, error) {
+	if err := bc.buildFS(); err != nil {
+		bc.Logger().Debugf("buildFS failed: %v", err)
 		b, err2 := yaml.Marshal(bc.ImageConfiguration)
 		if err2 != nil {
 			bc.Logger().Debugf("failed to marshal image configuration: %v", err2)
@@ -112,15 +116,146 @@ func (bc *Context) BuildLayer() (string, v1.Layer, error) {
 	bc.Summarize()
 
 	// build image filesystem
-	if _, err := bc.BuildImage(); err != nil {
+	if _, err := bc.BuildFS(); err != nil {
 		return "", nil, err
 	}
 
 	return bc.ImageLayoutToLayer()
 }
 
+func (bc *Context) BuildImage(layer v1.Layer) (v1.Image, error) {
+	mediaType, err := layer.MediaType()
+	if err != nil {
+		return nil, fmt.Errorf("accessing layer MediaType: %w", err)
+	}
+	bc.Logger().Printf("building image from layer")
+
+	ic := bc.ImageConfiguration
+
+	digest, err := layer.Digest()
+	if err != nil {
+		return nil, fmt.Errorf("could not calculate layer digest: %w", err)
+	}
+
+	diffid, err := layer.DiffID()
+	if err != nil {
+		return nil, fmt.Errorf("could not calculate layer diff id: %w", err)
+	}
+
+	bc.Logger().Printf("layer digest: %v", digest)
+	bc.Logger().Printf("layer diffID: %v", diffid)
+
+	created := bc.Options.SourceDateEpoch
+
+	adds := make([]mutate.Addendum, 0, 1)
+	adds = append(adds, mutate.Addendum{
+		Layer: layer,
+		History: v1.History{
+			Author:    "apko",
+			Comment:   "This is an apko single-layer image",
+			CreatedBy: "apko",
+			Created:   v1.Time{Time: created},
+		},
+	})
+
+	emptyImage := empty.Image
+	if mediaType == ggcrtypes.OCILayer {
+		// If building an OCI layer, then we should assume OCI manifest and config too
+		emptyImage = mutate.MediaType(emptyImage, ggcrtypes.OCIManifestSchema1)
+		emptyImage = mutate.ConfigMediaType(emptyImage, ggcrtypes.OCIConfigJSON)
+	}
+	img, err := mutate.Append(emptyImage, adds...)
+	if err != nil {
+		return nil, fmt.Errorf("unable to append layer to empty image: %w", err)
+	}
+
+	annotations := ic.Annotations
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	if ic.VCSUrl != "" {
+		if url, hash, ok := strings.Cut(ic.VCSUrl, "@"); ok {
+			annotations["org.opencontainers.image.source"] = url
+			annotations["org.opencontainers.image.revision"] = hash
+		}
+	}
+
+	if mediaType != ggcrtypes.DockerLayer && len(annotations) > 0 {
+		img = mutate.Annotations(img, annotations).(v1.Image)
+	}
+
+	cfg, err := img.ConfigFile()
+	if err != nil {
+		return nil, fmt.Errorf("unable to get config file: %w", err)
+	}
+
+	cfg = cfg.DeepCopy()
+	cfg.Author = "github.com/chainguard-dev/apko"
+	platform := bc.Options.Arch.ToOCIPlatform()
+	cfg.Architecture = platform.Architecture
+	cfg.Variant = platform.Variant
+	cfg.Created = v1.Time{Time: created}
+	cfg.Config.Labels = make(map[string]string)
+	cfg.OS = "linux"
+
+	// NOTE: Need to allow empty Entrypoints. The runtime will override to `/bin/sh -c` and handle quoting
+	switch {
+	case ic.Entrypoint.ShellFragment != "":
+		cfg.Config.Entrypoint = []string{"/bin/sh", "-c", ic.Entrypoint.ShellFragment}
+	case ic.Entrypoint.Command != "":
+		splitcmd, err := shlex.Split(ic.Entrypoint.Command)
+		if err != nil {
+			return nil, fmt.Errorf("unable to parse entrypoint command: %w", err)
+		}
+		cfg.Config.Entrypoint = splitcmd
+	}
+
+	if ic.Cmd != "" {
+		splitcmd, err := shlex.Split(ic.Cmd)
+		if err != nil {
+			return nil, fmt.Errorf("unable to parse cmd: %w", err)
+		}
+		cfg.Config.Cmd = splitcmd
+	}
+
+	if ic.WorkDir != "" {
+		cfg.Config.WorkingDir = ic.WorkDir
+	}
+
+	if len(ic.Environment) > 0 {
+		envs := []string{}
+
+		for k, v := range ic.Environment {
+			envs = append(envs, fmt.Sprintf("%s=%s", k, v))
+		}
+		sort.Strings(envs)
+
+		cfg.Config.Env = envs
+	} else {
+		cfg.Config.Env = []string{
+			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+			"SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
+		}
+	}
+
+	if ic.Accounts.RunAs != "" {
+		cfg.Config.User = ic.Accounts.RunAs
+	}
+
+	if ic.StopSignal != "" {
+		cfg.Config.StopSignal = ic.StopSignal
+	}
+
+	img, err = mutate.ConfigFile(img, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("unable to update config file: %w", err)
+	}
+
+	return img, nil
+}
+
 // ImageLayoutToLayer given an already built-out
-// image in an fs from BuildImage(), create
+// image in an fs from BuildFS(), create
 // an OCI image layer tgz.
 func (bc *Context) ImageLayoutToLayer() (string, v1.Layer, error) {
 	// run any assertions defined
@@ -143,9 +278,9 @@ func (bc *Context) ImageLayoutToLayer() (string, v1.Layer, error) {
 		bc.Logger().Debugf("Not generating SBOMs (WantSBOM = false)")
 	}
 
-	mt := v1types.OCILayer
+	mt := ggcrtypes.OCILayer
 	if bc.Options.UseDockerMediaTypes {
-		mt = v1types.DockerLayer
+		mt = ggcrtypes.DockerLayer
 	}
 
 	l := &layer{
@@ -271,6 +406,6 @@ func (l *layer) Size() (int64, error) {
 	return l.desc.Size, nil
 }
 
-func (l *layer) MediaType() (v1types.MediaType, error) {
+func (l *layer) MediaType() (ggcrtypes.MediaType, error) {
 	return l.desc.MediaType, nil
 }

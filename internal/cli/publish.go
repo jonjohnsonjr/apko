@@ -31,10 +31,10 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/authn/github"
 	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/google"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	coci "github.com/sigstore/cosign/v2/pkg/oci"
+	"github.com/sigstore/cosign/v2/pkg/oci/signed"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
@@ -223,7 +223,6 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 
 	var errg errgroup.Group
 	imgs := map[types.Architecture]coci.SignedImage{}
-	contexts := map[types.Architecture]*build.Context{}
 
 	// This is a hack to skip the SBOM generation during
 	// image build. Will be removed when global options are a thing.
@@ -257,14 +256,6 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 			return err
 		}
 
-		// we do not generate SBOMs for each arch, only possibly for final image
-		bc.Options.SBOMFormats = []string{}
-		bc.Options.WantSBOM = false
-		bc.ImageConfiguration.Archs = archs
-
-		// save the build context for later
-		contexts[arch] = bc
-
 		errg.Go(func() error {
 			bc.Options.Arch = arch
 
@@ -284,27 +275,60 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 			// This computation will only affect the timestamp of the image
 			// itself and its SBOMs, since the timestamps on files come from the
 			// APKs.
-			if bc.Options.SourceDateEpoch, err = bc.GetBuildDateEpoch(); err != nil {
+			bde, err := bc.GetBuildDateEpoch()
+			if err != nil {
 				return fmt.Errorf("failed to determine build date epoch: %w", err)
 			}
-			if bc.Options.SourceDateEpoch.After(multiArchBDE) {
-				multiArchBDE = bc.Options.SourceDateEpoch
+			if bde.After(multiArchBDE) {
+				multiArchBDE = bde
+			}
+			bc.Options.SourceDateEpoch = bde
+
+			img, err := bc.BuildImage(layer)
+			if err != nil {
+				return err
 			}
 
-			var img coci.SignedImage
-			dig, img, err := publishImage(ctx, bc, layer, arch, ropt...)
+			// TODO: Make build.Context do this?
+			ent, err := oci.AttachSBOM(signed.Image(img), bc.Options.SBOMPath, bc.Options.SBOMFormats, arch, bc.Logger())
 			if err != nil {
-				return fmt.Errorf("publishing %s image: %w", arch, err)
+				return fmt.Errorf("attaching SBOM to image: %w", err)
 			}
+
+			simg := ent.(coci.SignedImage)
+
+			local := bc.Options.Local
+			pushTags := bc.Options.StageTags == ""
+			tags := bc.Options.Tags
+
+			// TODO: We don't actually want to publish here, it's redundant with the index,
+			// and we end up just PUTing the same tag over and over again, which is super slow.
+			digest, err := oci.PublishImage(ctx, simg, bc.Logger(), local, pushTags, tags, ropt...)
+			if err != nil {
+				return fmt.Errorf("failed to build OCI image for %q: %w", arch, err)
+			}
+
+			// This should be the same across architectures
+			additionalTags = bc.Options.Tags
 
 			mu.Lock()
 			defer mu.Unlock()
 
-			// This should be the same across architectures
-			additionalTags = bc.Options.Tags
-			finalDigest = dig
-			builtReferences = append(builtReferences, dig.String())
-			imgs[arch] = img
+			builtReferences = append(builtReferences, digest.String())
+			imgs[arch] = simg
+
+			// TODO: We shouldn't need to do this.
+			if bc.Options.WantSBOM {
+				bc.Logger().Infof("Generating %s SBOMs", arch)
+
+				if err := bc.GenerateImageSBOM(arch, simg); err != nil {
+					return fmt.Errorf("generating sbom for %s: %w", arch, err)
+				}
+
+				if _, err := oci.PostAttachSBOM(ctx, simg, bc.Options.SBOMPath, bc.Options.SBOMFormats, arch, bc.Logger(), bc.Options.Tags, ropt...); err != nil {
+					return fmt.Errorf("attaching sboms to %s image: %w", arch, err)
+				}
+			}
 
 			return nil
 		})
@@ -375,34 +399,7 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 	}
 
 	if wantSBOM {
-		bc.Options.Log.Infof("Generating arch image SBOMs")
-		var g errgroup.Group
-		for arch, img := range imgs {
-			arch, img := arch, img
-			bc := contexts[arch]
-
-			bc.Options.WantSBOM = true
-			bc.Options.SBOMFormats = formats
-			bc.Options.SBOMPath = sbomPath
-
-			g.Go(func() error {
-				if err := bc.GenerateImageSBOM(arch, img); err != nil {
-					return fmt.Errorf("generating sbom for %s: %w", arch, err)
-				}
-
-				if _, err := oci.PostAttachSBOM(
-					ctx, img, sbomPath, bc.Options.SBOMFormats, arch, bc.Logger(), bc.Options.Tags, ropt...,
-				); err != nil {
-					return fmt.Errorf("attaching sboms to %s image: %w", arch, err)
-				}
-
-				return nil
-			})
-		}
-
-		if err := g.Wait(); err != nil {
-			return err
-		}
+		bc.Options.Log.Infof("Generating index SBOMs")
 
 		if err := bc.GenerateIndexSBOM(finalDigest, imgs); err != nil {
 			return fmt.Errorf("generating index SBOM: %w", err)
@@ -432,34 +429,16 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 	return nil
 }
 
-// publishImage publishes a specific architecture image
-func publishImage(ctx context.Context, bc *build.Context, layer v1.Layer, arch types.Architecture, ropt ...remote.Option) (imgDigest name.Digest, img coci.SignedImage, err error) {
-	shouldPushTags := bc.Options.StageTags == ""
-	imgDigest, img, err = oci.PublishImageFromLayer(ctx,
-		layer, bc.ImageConfiguration, bc.Options.SourceDateEpoch, arch, bc.Logger(),
-		bc.Options.SBOMPath, bc.Options.SBOMFormats, bc.Options.Local, shouldPushTags, bc.Options.Tags, ropt...,
-	)
-	if err != nil {
-		return name.Digest{}, nil, fmt.Errorf("failed to build OCI image for %q: %w", arch, err)
-	}
-	return imgDigest, img, nil
-}
-
 // publishIndex publishes the new image index
-func publishIndex(ctx context.Context, bc *build.Context, imgs map[types.Architecture]coci.SignedImage, ropt ...remote.Option) (
-	indexDigest name.Digest, idx coci.SignedImageIndex, err error,
-) {
+func publishIndex(ctx context.Context, bc *build.Context, imgs map[types.Architecture]coci.SignedImage, ropt ...remote.Option) (name.Digest, coci.SignedImageIndex, error) {
+	idx, err := oci.BuildIndex(imgs, bc.Options.UseDockerMediaTypes)
+	if err != nil {
+		return name.Digest{}, nil, fmt.Errorf("failed to build index: %w", err)
+	}
 	shouldPushTags := bc.Options.StageTags == ""
-	if bc.Options.UseDockerMediaTypes {
-		indexDigest, idx, err = oci.PublishDockerIndex(ctx, bc.ImageConfiguration, imgs, bc.Options.Log, bc.Options.Local, shouldPushTags, bc.Options.Tags, ropt...)
-		if err != nil {
-			return name.Digest{}, nil, fmt.Errorf("failed to build Docker index: %w", err)
-		}
-	} else {
-		indexDigest, idx, err = oci.PublishIndex(ctx, bc.ImageConfiguration, imgs, bc.Options.Log, bc.Options.Local, shouldPushTags, bc.Options.Tags, ropt...)
-		if err != nil {
-			return name.Digest{}, nil, fmt.Errorf("failed to build OCI index: %w", err)
-		}
+	indexDigest, err := oci.PublishIndex(ctx, idx, bc.Logger(), bc.Options.Local, shouldPushTags, bc.Options.Tags, ropt...)
+	if err != nil {
+		return name.Digest{}, nil, fmt.Errorf("failed to build OCI index: %w", err)
 	}
 	return indexDigest, idx, nil
 }

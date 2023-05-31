@@ -23,6 +23,7 @@ import (
 	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 	"github.com/google/go-containerregistry/pkg/name"
 	coci "github.com/sigstore/cosign/v2/pkg/oci"
+	"github.com/sigstore/cosign/v2/pkg/oci/signed"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
@@ -173,11 +174,7 @@ func BuildCmd(ctx context.Context, imageRef, outputTarGZ string, archs []types.A
 	}
 	// save the final set we will build
 	archs = bc.ImageConfiguration.Archs
-	bc.Logger().Infof(
-		"Building images for %d architectures: %+v",
-		len(bc.ImageConfiguration.Archs),
-		bc.ImageConfiguration.Archs,
-	)
+	bc.Logger().Infof("Building images for %d architectures: %+v", archs, archs)
 
 	// The build context options is sometimes copied in the next functions. Ensure
 	// we have the directory defined and created by invoking the function early.
@@ -256,13 +253,19 @@ func BuildCmd(ctx context.Context, imageRef, outputTarGZ string, archs []types.A
 				multiArchBDE = bc.Options.SourceDateEpoch
 			}
 
-			imageTars[arch] = layerTarGZ
-			img, err := oci.BuildImageFromLayer(
-				layer, bc.ImageConfiguration, bc.Logger(), bc.Options)
+			img, err := bc.BuildImage(layer)
 			if err != nil {
 				return fmt.Errorf("failed to build OCI image: %w", err)
 			}
-			imgs[arch] = img
+
+			ent, err := oci.AttachSBOM(signed.Image(img), bc.Options.SBOMPath, bc.Options.SBOMFormats, arch, bc.Logger())
+			if err != nil {
+				return fmt.Errorf("attaching SBOM to image: %w", err)
+			}
+
+			simg := ent.(coci.SignedImage)
+			imageTars[arch] = layerTarGZ
+			imgs[arch] = simg
 			return nil
 		})
 	}
@@ -299,8 +302,13 @@ func BuildCmd(ctx context.Context, imageRef, outputTarGZ string, archs []types.A
 		}
 	}
 
+	idx, err := oci.BuildIndex(imgs, bc.Options.UseDockerMediaTypes)
+	if err != nil {
+		return err
+	}
+
 	// finally generate the tar.gz file that includes all of the arch images and an index
-	finalDigest, err = oci.BuildIndex(outputTarGZ, bc.ImageConfiguration, imgs, bc.Options.Tags, bc.Logger())
+	finalDigest, err = oci.WriteIndex(outputTarGZ, idx, bc.Logger())
 	if err != nil {
 		return fmt.Errorf("failed to build index: %w", err)
 	}
@@ -310,9 +318,7 @@ func BuildCmd(ctx context.Context, imageRef, outputTarGZ string, archs []types.A
 		}
 	}
 
-	bc.Logger().Infof(
-		"Final index tgz at: %s", outputTarGZ,
-	)
+	bc.Logger().Infof("Final index tgz at: %s", outputTarGZ)
 
 	return nil
 }

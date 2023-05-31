@@ -15,27 +15,23 @@
 package oci
 
 import (
-	"archive/tar"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/avast/retry-go"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/daemon"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	v1tar "github.com/google/go-containerregistry/pkg/v1/tarball"
 	ggcrtypes "github.com/google/go-containerregistry/pkg/v1/types"
-	"github.com/google/shlex"
 	"github.com/sigstore/cosign/v2/pkg/oci"
 	ocimutate "github.com/sigstore/cosign/v2/pkg/oci/mutate"
 	ociremote "github.com/sigstore/cosign/v2/pkg/oci/remote"
@@ -47,152 +43,13 @@ import (
 
 	"chainguard.dev/apko/pkg/build/types"
 	"chainguard.dev/apko/pkg/log"
-	"chainguard.dev/apko/pkg/options"
+	"github.com/chainguard-dev/go-apk/pkg/tarball"
 )
 
 const (
 	LocalDomain = "apko.local"
 	LocalRepo   = "cache"
 )
-
-func BuildImageFromLayer(layer v1.Layer, ic types.ImageConfiguration, logger log.Logger, opts options.Options) (oci.SignedImage, error) {
-	return buildImageFromLayer(layer, ic, opts.SourceDateEpoch, opts.Arch, logger, opts.SBOMPath, opts.SBOMFormats)
-}
-
-func buildImageFromLayer(layer v1.Layer, ic types.ImageConfiguration, created time.Time, arch types.Architecture, logger log.Logger, sbomPath string, sbomFormats []string) (oci.SignedImage, error) {
-	mediaType, err := layer.MediaType()
-	if err != nil {
-		return nil, fmt.Errorf("accessing layer MediaType: %w", err)
-	}
-	imageType := humanReadableImageType(mediaType)
-	logger.Printf("building image from layer")
-
-	digest, err := layer.Digest()
-	if err != nil {
-		return nil, fmt.Errorf("could not calculate layer digest: %w", err)
-	}
-
-	diffid, err := layer.DiffID()
-	if err != nil {
-		return nil, fmt.Errorf("could not calculate layer diff id: %w", err)
-	}
-
-	logger.Printf("%s layer digest: %v", imageType, digest)
-	logger.Printf("%s layer diffID: %v", imageType, diffid)
-
-	adds := make([]mutate.Addendum, 0, 1)
-	adds = append(adds, mutate.Addendum{
-		Layer: layer,
-		History: v1.History{
-			Author:    "apko",
-			Comment:   "This is an apko single-layer image",
-			CreatedBy: "apko",
-			Created:   v1.Time{Time: created},
-		},
-	})
-
-	emptyImage := empty.Image
-	if mediaType == ggcrtypes.OCILayer {
-		// If building an OCI layer, then we should assume OCI manifest and config too
-		emptyImage = mutate.MediaType(emptyImage, ggcrtypes.OCIManifestSchema1)
-		emptyImage = mutate.ConfigMediaType(emptyImage, ggcrtypes.OCIConfigJSON)
-	}
-	v1Image, err := mutate.Append(emptyImage, adds...)
-	if err != nil {
-		return nil, fmt.Errorf("unable to append %s layer to empty image: %w", imageType, err)
-	}
-
-	annotations := ic.Annotations
-	if annotations == nil {
-		annotations = map[string]string{}
-	}
-	if ic.VCSUrl != "" {
-		if url, hash, ok := strings.Cut(ic.VCSUrl, "@"); ok {
-			annotations["org.opencontainers.image.source"] = url
-			annotations["org.opencontainers.image.revision"] = hash
-		}
-	}
-
-	if mediaType != ggcrtypes.DockerLayer && len(annotations) > 0 {
-		v1Image = mutate.Annotations(v1Image, annotations).(v1.Image)
-	}
-
-	cfg, err := v1Image.ConfigFile()
-	if err != nil {
-		return nil, fmt.Errorf("unable to get %s config file: %w", imageType, err)
-	}
-
-	cfg = cfg.DeepCopy()
-	cfg.Author = "github.com/chainguard-dev/apko"
-	platform := arch.ToOCIPlatform()
-	cfg.Architecture = platform.Architecture
-	cfg.Variant = platform.Variant
-	cfg.Created = v1.Time{Time: created}
-	cfg.Config.Labels = make(map[string]string)
-	cfg.OS = "linux"
-
-	// NOTE: Need to allow empty Entrypoints. The runtime will override to `/bin/sh -c` and handle quoting
-	switch {
-	case ic.Entrypoint.ShellFragment != "":
-		cfg.Config.Entrypoint = []string{"/bin/sh", "-c", ic.Entrypoint.ShellFragment}
-	case ic.Entrypoint.Command != "":
-		splitcmd, err := shlex.Split(ic.Entrypoint.Command)
-		if err != nil {
-			return nil, fmt.Errorf("unable to parse entrypoint command: %w", err)
-		}
-		cfg.Config.Entrypoint = splitcmd
-	}
-
-	if ic.Cmd != "" {
-		splitcmd, err := shlex.Split(ic.Cmd)
-		if err != nil {
-			return nil, fmt.Errorf("unable to parse cmd: %w", err)
-		}
-		cfg.Config.Cmd = splitcmd
-	}
-
-	if ic.WorkDir != "" {
-		cfg.Config.WorkingDir = ic.WorkDir
-	}
-
-	if len(ic.Environment) > 0 {
-		envs := []string{}
-
-		for k, v := range ic.Environment {
-			envs = append(envs, fmt.Sprintf("%s=%s", k, v))
-		}
-		sort.Strings(envs)
-
-		cfg.Config.Env = envs
-	} else {
-		cfg.Config.Env = []string{
-			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-			"SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
-		}
-	}
-
-	if ic.Accounts.RunAs != "" {
-		cfg.Config.User = ic.Accounts.RunAs
-	}
-
-	if ic.StopSignal != "" {
-		cfg.Config.StopSignal = ic.StopSignal
-	}
-
-	v1Image, err = mutate.ConfigFile(v1Image, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("unable to update %s config file: %w", imageType, err)
-	}
-
-	si := signed.Image(v1Image)
-	var ent oci.SignedEntity
-	var err2 error
-	if ent, err2 = attachSBOM(si, sbomPath, sbomFormats, arch, logger); err2 != nil {
-		return nil, fmt.Errorf("attaching SBOM to image: %w", err2)
-	}
-
-	return ent.(oci.SignedImage), nil
-}
 
 func Copy(ctx context.Context, src, dst string, remoteOpts ...remote.Option) error {
 	log.DefaultLogger().Infof("Copying %s to %s", src, dst)
@@ -220,20 +77,27 @@ func Copy(ctx context.Context, src, dst string, remoteOpts ...remote.Option) err
 }
 
 // PostAttachSBOM attaches the sboms to an already published image
-func PostAttachSBOM(ctx context.Context, si oci.SignedEntity, sbomPath string, sbomFormats []string,
-	arch types.Architecture, logger log.Logger, tags []string, remoteOpts ...remote.Option) (oci.SignedEntity, error) {
-	var err2 error
-	if si, err2 = attachSBOM(si, sbomPath, sbomFormats, arch, logger); err2 != nil {
-		return nil, err2
+func PostAttachSBOM(ctx context.Context, si oci.SignedEntity, sbomPath string, sbomFormats []string, arch types.Architecture, logger log.Logger, tags []string, remoteOpts ...remote.Option) (oci.SignedEntity, error) {
+	si, err := AttachSBOM(si, sbomPath, sbomFormats, arch, logger)
+	if err != nil {
+		return nil, err
 	}
 	var g errgroup.Group
+	seen := map[string]struct{}{}
 	for _, tag := range tags {
 		ref, err := name.ParseReference(tag)
 		if err != nil {
 			return nil, fmt.Errorf("parsing reference: %w", err)
 		}
+		repo := ref.Context()
+		if _, ok := seen[repo.String()]; ok {
+			continue
+		}
+
+		seen[repo.String()] = struct{}{}
+
 		// Write any attached SBOMs/signatures.
-		wp := writePeripherals(ref, logger, remoteOpts...)
+		wp := writePeripherals(repo, logger, remoteOpts...)
 		g.Go(func() error {
 			return wp(ctx, si)
 		})
@@ -244,10 +108,7 @@ func PostAttachSBOM(ctx context.Context, si oci.SignedEntity, sbomPath string, s
 	return si, nil
 }
 
-func attachSBOM(
-	si oci.SignedEntity, sbomPath string, sbomFormats []string,
-	arch types.Architecture, logger log.Logger,
-) (oci.SignedEntity, error) {
+func AttachSBOM(si oci.SignedEntity, sbomPath string, sbomFormats []string, arch types.Architecture, logger log.Logger) (oci.SignedEntity, error) {
 	// Attach the SBOM, e.g.
 	// TODO(kaniini): Allow all SBOM types to be uploaded.
 	if len(sbomFormats) == 0 {
@@ -303,48 +164,160 @@ func attachSBOM(
 	return si, nil
 }
 
-func BuildImageTarballFromLayer(imageRef string, layer v1.Layer, outputTarGZ string, ic types.ImageConfiguration, logger log.Logger, opts options.Options) error {
-	v1Image, err := buildImageFromLayer(layer, ic, opts.SourceDateEpoch, opts.Arch, logger, opts.SBOMPath, opts.SBOMFormats)
+func LoadImage(ctx context.Context, image oci.SignedImage, imageRef string, logger log.Logger) (name.Digest, error) {
+	hash, err := image.Digest()
 	if err != nil {
-		return err
+		return name.Digest{}, err
 	}
-
-	if v1Image == nil {
-		return errors.New("image build from layer returned nil")
-	}
-	imgRefTag, err := name.NewTag(imageRef)
+	localSrcTagStr := fmt.Sprintf("%s/%s:%s", LocalDomain, LocalRepo, hash.Hex)
+	localSrcTag, err := name.NewTag(localSrcTagStr)
 	if err != nil {
-		return fmt.Errorf("unable to validate image reference tag: %w", err)
+		return name.Digest{}, err
 	}
-
-	if err := v1tar.WriteToFile(outputTarGZ, imgRefTag, v1Image); err != nil {
-		return fmt.Errorf("unable to write image to disk: %w", err)
+	logger.Infof("saving OCI image locally: %s", localSrcTag.Name())
+	resp, err := daemon.Write(localSrcTag, image)
+	if err != nil {
+		logger.Errorf("docker daemon error: %s", strings.ReplaceAll(resp, "\n", "\\n"))
+		return name.Digest{}, fmt.Errorf("failed to save OCI image locally: %w", err)
 	}
-
-	logger.Printf("output image file to %s", outputTarGZ)
-	return nil
+	logger.Debugf("docker daemon response: %s", strings.ReplaceAll(resp, "\n", "\\n"))
+	localDstTag, err := name.NewTag(imageRef)
+	if err != nil {
+		return name.Digest{}, err
+	}
+	if strings.HasPrefix(localSrcTag.Name(), fmt.Sprintf("%s/", LocalDomain)) {
+		logger.Warnf("skipping local domain tagging %s as %s", localSrcTag.Name(), localDstTag.Name())
+	} else {
+		logger.Printf("tagging local image %s as %s", localSrcTag.Name(), localDstTag.Name())
+		if err := daemon.Tag(localSrcTag, localDstTag); err != nil {
+			return name.Digest{}, err
+		}
+	}
+	return name.NewDigest(fmt.Sprintf("%s@%s", localSrcTag.Name(), hash))
 }
 
-func publishTagFromImage(ctx context.Context, image oci.SignedImage, imageRef string, hash v1.Hash, local bool, logger log.Logger, remoteOpts ...remote.Option) (name.Digest, error) {
-	imgRef, err := name.ParseReference(imageRef)
+func PublishImageDigest(ctx context.Context, si oci.SignedImage, ref name.Digest, logger log.Logger, remoteOpts ...remote.Option) (name.Digest, error) {
+	logger.Printf("publishing image without tag (digest only)")
+
+	var g errgroup.Group
+
+	// Write any attached SBOMs/signatures.
+	wp := writePeripherals(ref.Context(), logger, remoteOpts...)
+	g.Go(func() error {
+		return wp(ctx, si)
+	})
+
+	g.Go(func() error {
+		return retry.Do(func() error {
+			return remote.Write(ref, si, remoteOpts...)
+		})
+	})
+
+	if err := g.Wait(); err != nil {
+		return name.Digest{}, fmt.Errorf("failed to publish: %w", err)
+	}
+	return ref, nil
+}
+
+func PublishImageTags(ctx context.Context, si oci.SignedImage, logger log.Logger, tags []string, remoteOpts ...remote.Option) (name.Digest, error) {
+	h, err := si.Digest()
 	if err != nil {
-		return name.Digest{}, fmt.Errorf("unable to parse reference: %w", err)
+		return name.Digest{}, fmt.Errorf("failed to compute digest: %w", err)
 	}
 
+	var g errgroup.Group
+
+	digest := name.Digest{}
+	for i, tag := range tags {
+		logger.Printf("publishing image tag %v", tag)
+		ref, err := name.ParseReference(tag)
+		if err != nil {
+			return name.Digest{}, fmt.Errorf("unable to parse reference: %w", err)
+		}
+
+		if i == 0 {
+			digest = ref.Context().Digest(h.String())
+		}
+
+		// Write any attached SBOMs/signatures.
+		wp := writePeripherals(ref.Context(), logger, remoteOpts...)
+		g.Go(func() error {
+			return wp(ctx, si)
+		})
+
+		g.Go(func() error {
+			return retry.Do(func() error {
+				return remote.Write(ref, si, remoteOpts...)
+			})
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return name.Digest{}, fmt.Errorf("failed to publish: %w", err)
+	}
+
+	return digest, nil
+}
+
+func PublishImage(ctx context.Context, si oci.SignedImage, logger log.Logger, local bool, pushTags bool, tags []string, remoteOpts ...remote.Option) (name.Digest, error) {
+	imageRef := tags[0]
 	if local {
-		localSrcTagStr := fmt.Sprintf("%s/%s:%s", LocalDomain, LocalRepo, hash.Hex)
-		localSrcTag, err := name.NewTag(localSrcTagStr)
+		return LoadImage(ctx, si, imageRef, logger)
+	}
+
+	if !pushTags {
+		h, err := si.Digest()
 		if err != nil {
 			return name.Digest{}, err
 		}
-		logger.Infof("saving OCI image locally: %s", localSrcTag.Name())
-		resp, err := daemon.Write(localSrcTag, image)
+
+		tag, err := name.ParseReference(imageRef)
 		if err != nil {
-			logger.Errorf("docker daemon error: %s", strings.ReplaceAll(resp, "\n", "\\n"))
-			return name.Digest{}, fmt.Errorf("failed to save OCI image locally: %w", err)
+			return name.Digest{}, err
 		}
-		logger.Debugf("docker daemon response: %s", strings.ReplaceAll(resp, "\n", "\\n"))
-		localDstTag, err := name.NewTag(imageRef)
+
+		dig := tag.Context().Digest(h.String())
+		return PublishImageDigest(ctx, si, dig, logger, remoteOpts...)
+	}
+
+	return PublishImageTags(ctx, si, logger, tags, remoteOpts...)
+}
+
+// TODO: This should write the image, too.
+func LoadIndex(ctx context.Context, idx oci.SignedImageIndex, logger log.Logger, tags []string) (name.Digest, error) {
+	im, err := idx.IndexManifest()
+	if err != nil {
+		return name.Digest{}, err
+	}
+	goos, goarch := os.Getenv("GOOS"), os.Getenv("GOARCH")
+	if goos == "" {
+		goos = "linux"
+	}
+	if goarch == "" {
+		goarch = "amd64"
+	}
+	// Default to just using the first one in the list if we cannot match
+	useManifest := im.Manifests[0]
+	for _, manifest := range im.Manifests {
+		if manifest.Platform == nil {
+			continue
+		}
+		if manifest.Platform.OS != goos {
+			continue
+		}
+		if manifest.Platform.Architecture != goarch {
+			continue
+		}
+		useManifest = manifest
+	}
+	localSrcTagStr := fmt.Sprintf("%s/%s:%s", LocalDomain, LocalRepo, useManifest.Digest.Hex)
+	logger.Printf("using best guess single-arch image for local tags: %s (%s/%s)", localSrcTagStr, goos, goarch)
+	localSrcTag, err := name.NewTag(localSrcTagStr)
+	if err != nil {
+		return name.Digest{}, err
+	}
+	for _, tag := range tags {
+		localDstTag, err := name.NewTag(tag)
 		if err != nil {
 			return name.Digest{}, err
 		}
@@ -356,208 +329,22 @@ func publishTagFromImage(ctx context.Context, image oci.SignedImage, imageRef st
 				return name.Digest{}, err
 			}
 		}
-		return name.NewDigest(fmt.Sprintf("%s@%s", localSrcTag.Name(), hash))
 	}
-
-	var g errgroup.Group
-
-	// Write any attached SBOMs/signatures.
-	wp := writePeripherals(imgRef, logger, remoteOpts...)
-	g.Go(func() error {
-		return wp(ctx, image)
-	})
-
-	g.Go(func() error {
-		return retry.Do(func() error {
-			return remote.Write(imgRef, image, remoteOpts...)
-		})
-	})
-
-	if err := g.Wait(); err != nil {
-		return name.Digest{}, fmt.Errorf("failed to publish: %w", err)
-	}
-	return imgRef.Context().Digest(hash.String()), nil
-}
-
-func PublishImageFromLayer(ctx context.Context, layer v1.Layer, ic types.ImageConfiguration, created time.Time, arch types.Architecture, logger log.Logger, sbomPath string, sbomFormats []string, local bool, shouldPushTags bool, tags []string, remoteOpts ...remote.Option) (name.Digest, oci.SignedImage, error) {
-	return publishImageFromLayer(ctx, layer, ic, created, arch, logger, sbomPath, sbomFormats, local, shouldPushTags, tags, remoteOpts...)
-}
-
-func publishImageFromLayer(ctx context.Context, layer v1.Layer, ic types.ImageConfiguration, created time.Time, arch types.Architecture, logger log.Logger, sbomPath string, sbomFormats []string, local bool, shouldPushTags bool, tags []string, remoteOpts ...remote.Option) (name.Digest, oci.SignedImage, error) {
-	v1Image, err := buildImageFromLayer(layer, ic, created, arch, logger, sbomPath, sbomFormats)
+	digest, err := name.NewDigest(fmt.Sprintf("%s@%s", localSrcTag.Name(), useManifest.Digest.String()))
 	if err != nil {
-		return name.Digest{}, nil, err
+		return name.Digest{}, err
 	}
-
-	h, err := v1Image.Digest()
-	if err != nil {
-		return name.Digest{}, nil, fmt.Errorf("failed to compute digest: %w", err)
-	}
-
-	digest := name.Digest{}
-	if shouldPushTags {
-		for _, tag := range tags {
-			logger.Printf("publishing image tag %v", tag)
-			digest, err = publishTagFromImage(ctx, v1Image, tag, h, local, logger, remoteOpts...)
-			if err != nil {
-				return name.Digest{}, nil, err
-			}
-		}
-	} else {
-		logger.Printf("publishing image without tag (digest only)")
-		digestOnly := fmt.Sprintf("%s@%s", strings.Split(tags[0], ":")[0], h.String())
-		digest, err = publishTagFromImage(ctx, v1Image, digestOnly, h, local, logger, remoteOpts...)
-		if err != nil {
-			return name.Digest{}, nil, err
-		}
-	}
-
-	return digest, v1Image, nil
+	return digest, nil
 }
 
-func PublishIndex(ctx context.Context, ic types.ImageConfiguration, imgs map[types.Architecture]oci.SignedImage, logger log.Logger, local bool, shouldPushTags bool, tags []string, remoteOpts ...remote.Option) (name.Digest, oci.SignedImageIndex, error) {
-	return publishIndexWithMediaType(ctx, ggcrtypes.OCIImageIndex, ic, imgs, logger, local, shouldPushTags, tags, remoteOpts...)
-}
-
-func PublishDockerIndex(ctx context.Context, ic types.ImageConfiguration, imgs map[types.Architecture]oci.SignedImage, logger log.Logger, local bool, shouldPushTags bool, tags []string, remoteOpts ...remote.Option) (name.Digest, oci.SignedImageIndex, error) {
-	return publishIndexWithMediaType(ctx, ggcrtypes.DockerManifestList, ic, imgs, logger, local, shouldPushTags, tags, remoteOpts...)
-}
-
-func publishIndexWithMediaType(ctx context.Context, mediaType ggcrtypes.MediaType, _ types.ImageConfiguration, imgs map[types.Architecture]oci.SignedImage, logger log.Logger, local bool, shouldPushTags bool, tags []string, remoteOpts ...remote.Option) (name.Digest, oci.SignedImageIndex, error) {
-	idx := signed.ImageIndex(mutate.IndexMediaType(empty.Index, mediaType))
-	archs := make([]types.Architecture, 0, len(imgs))
-	for arch := range imgs {
-		archs = append(archs, arch)
-	}
-	sort.Slice(archs, func(i, j int) bool {
-		return archs[i].String() < archs[j].String()
-	})
-	for _, arch := range archs {
-		img := imgs[arch]
-		mt, err := img.MediaType()
-		if err != nil {
-			return name.Digest{}, nil, fmt.Errorf("failed to get mediatype: %w", err)
-		}
-
-		h, err := img.Digest()
-		if err != nil {
-			return name.Digest{}, nil, fmt.Errorf("failed to compute digest: %w", err)
-		}
-
-		size, err := img.Size()
-		if err != nil {
-			return name.Digest{}, nil, fmt.Errorf("failed to compute size: %w", err)
-		}
-
-		idx = ocimutate.AppendManifests(idx, ocimutate.IndexAddendum{
-			Add: img,
-			Descriptor: v1.Descriptor{
-				MediaType: mt,
-				Digest:    h,
-				Size:      size,
-				Platform:  arch.ToOCIPlatform(),
-			},
-		})
-	}
-
-	// TODO(jason): Also set annotations on the index. ggcr's
-	// pkg/v1/mutate.Annotations will drop the interface methods from
-	// oci.SignedImageIndex, so we may need to reimplement
-	// mutate.Annotations in ocimutate to keep it for now.
-
-	// If attempting to save locally, pick the native architecture
-	// and use that cached image for local tags
-	// Ported from https://github.com/ko-build/ko/blob/main/pkg/publish/daemon.go#L92-L168
-	if local {
-		im, err := idx.IndexManifest()
-		if err != nil {
-			return name.Digest{}, nil, err
-		}
-		goos, goarch := os.Getenv("GOOS"), os.Getenv("GOARCH")
-		if goos == "" {
-			goos = "linux"
-		}
-		if goarch == "" {
-			goarch = "amd64"
-		}
-		// Default to just using the first one in the list if we cannot match
-		useManifest := im.Manifests[0]
-		for _, manifest := range im.Manifests {
-			if manifest.Platform == nil {
-				continue
-			}
-			if manifest.Platform.OS != goos {
-				continue
-			}
-			if manifest.Platform.Architecture != goarch {
-				continue
-			}
-			useManifest = manifest
-		}
-		localSrcTagStr := fmt.Sprintf("%s/%s:%s", LocalDomain, LocalRepo, useManifest.Digest.Hex)
-		logger.Printf("using best guess single-arch image for local tags: %s (%s/%s)", localSrcTagStr, goos, goarch)
-		localSrcTag, err := name.NewTag(localSrcTagStr)
-		if err != nil {
-			return name.Digest{}, nil, err
-		}
-		for _, tag := range tags {
-			localDstTag, err := name.NewTag(tag)
-			if err != nil {
-				return name.Digest{}, nil, err
-			}
-			if strings.HasPrefix(localSrcTag.Name(), fmt.Sprintf("%s/", LocalDomain)) {
-				logger.Warnf("skipping local domain tagging %s as %s", localSrcTag.Name(), localDstTag.Name())
-			} else {
-				logger.Printf("tagging local image %s as %s", localSrcTag.Name(), localDstTag.Name())
-				if err := daemon.Tag(localSrcTag, localDstTag); err != nil {
-					return name.Digest{}, nil, err
-				}
-			}
-		}
-		digest, err := name.NewDigest(fmt.Sprintf("%s@%s", localSrcTag.Name(), useManifest.Digest.String()))
-		if err != nil {
-			return name.Digest{}, nil, err
-		}
-		return digest, idx, nil
-	}
-
-	h, err := idx.Digest()
-	if err != nil {
-		return name.Digest{}, nil, err
-	}
-
-	digest := name.Digest{}
-	if shouldPushTags {
-		for _, tag := range tags {
-			logger.Printf("publishing index tag %v", tag)
-			digest, err = publishTagFromIndex(ctx, idx, tag, h, logger, remoteOpts...)
-			if err != nil {
-				return name.Digest{}, nil, err
-			}
-		}
-	} else {
-		logger.Printf("publishing index without tag (digest only)")
-		digestOnly := fmt.Sprintf("%s@%s", strings.Split(tags[0], ":")[0], h.String())
-		digest, err = publishTagFromIndex(ctx, idx, digestOnly, h, logger, remoteOpts...)
-		if err != nil {
-			return name.Digest{}, nil, err
-		}
-	}
-
-	return digest, idx, nil
-}
-
-func publishTagFromIndex(ctx context.Context, index oci.SignedImageIndex, imageRef string, hash v1.Hash, logger log.Logger, remoteOpts ...remote.Option) (name.Digest, error) {
-	ref, err := name.ParseReference(imageRef)
-	if err != nil {
-		return name.Digest{}, fmt.Errorf("unable to parse reference: %w", err)
-	}
+func PublishIndexDigest(ctx context.Context, idx oci.SignedImageIndex, ref name.Digest, logger log.Logger, remoteOpts ...remote.Option) (name.Digest, error) {
+	logger.Printf("publishing index without tag (digest only)")
 
 	var g errgroup.Group
 
 	// Write any attached SBOMs/signatures (recursively)
-	wp := writePeripherals(ref, logger, remoteOpts...)
-	if err := walk.SignedEntity(ctx, index, func(ctx context.Context, se oci.SignedEntity) error {
+	wp := writePeripherals(ref.Context(), logger, remoteOpts...)
+	if err := walk.SignedEntity(ctx, idx, func(ctx context.Context, se oci.SignedEntity) error {
 		g.Go(func() error {
 			return wp(ctx, se)
 		})
@@ -568,33 +355,94 @@ func publishTagFromIndex(ctx context.Context, index oci.SignedImageIndex, imageR
 
 	g.Go(func() error {
 		return retry.Do(func() error {
-			return remote.WriteIndex(ref, index, remoteOpts...)
+			return remote.WriteIndex(ref, idx, remoteOpts...)
 		})
 	})
 	if err := g.Wait(); err != nil {
 		return name.Digest{}, fmt.Errorf("failed to publish: %w", err)
 	}
 
-	return ref.Context().Digest(hash.String()), nil
+	return ref, nil
 }
 
-// BuildIndex builds an index in a tar.gz file containing all architectures, given their individual image tar.gz files.
-// Uses the standard OCI media type for the image index.
-// Returns the digest and the path to the combined tar.gz.
-func BuildIndex(outfile string, ic types.ImageConfiguration, imgs map[types.Architecture]oci.SignedImage, tags []string, logger log.Logger) (name.Digest, error) {
-	return buildIndexWithMediaType(outfile, ggcrtypes.OCIImageIndex, ic, imgs, tags, logger)
+func PublishIndexTags(ctx context.Context, idx oci.SignedImageIndex, logger log.Logger, tags []string, remoteOpts ...remote.Option) error {
+	var g errgroup.Group
+
+	for _, tag := range tags {
+		ref, err := name.ParseReference(tag)
+		if err != nil {
+			return fmt.Errorf("unable to parse reference: %w", err)
+		}
+
+		logger.Printf("publishing index tag %v", tag)
+
+		// Write any attached SBOMs/signatures (recursively)
+		wp := writePeripherals(ref.Context(), logger, remoteOpts...)
+		if err := walk.SignedEntity(ctx, idx, func(ctx context.Context, se oci.SignedEntity) error {
+			g.Go(func() error {
+				return wp(ctx, se)
+			})
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		g.Go(func() error {
+			return retry.Do(func() error {
+				return remote.WriteIndex(ref, idx, remoteOpts...)
+			})
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("failed to publish: %w", err)
+	}
+
+	return nil
 }
 
-// BuildIndex builds an index in a tar.gz file containing all architectures, given their individual image tar.gz files.
-// Uses the legacy docker media type for the image index, i.e. multiarch manifest.
-// Returns the digest and the path to the combined tar.gz.
-func BuildDockerIndex(outfile string, ic types.ImageConfiguration, imgs map[types.Architecture]oci.SignedImage, tags []string, logger log.Logger) (name.Digest, error) {
-	return buildIndexWithMediaType(outfile, ggcrtypes.DockerManifestList, ic, imgs, tags, logger)
+func PublishIndex(ctx context.Context, idx oci.SignedImageIndex, logger log.Logger, local bool, shouldPushTags bool, tags []string, remoteOpts ...remote.Option) (name.Digest, error) {
+	// TODO(jason): Also set annotations on the index. ggcr's
+	// pkg/v1/mutate.Annotations will drop the interface methods from
+	// oci.SignedImageIndex, so we may need to reimplement
+	// mutate.Annotations in ocimutate to keep it for now.
+
+	// If attempting to save locally, pick the native architecture
+	// and use that cached image for local tags
+	// Ported from https://github.com/ko-build/ko/blob/main/pkg/publish/daemon.go#L92-L168
+	if local {
+		return LoadIndex(ctx, idx, logger, tags)
+	}
+
+	h, err := idx.Digest()
+	if err != nil {
+		return name.Digest{}, err
+	}
+
+	ref, err := name.ParseReference(tags[0])
+	if err != nil {
+		return name.Digest{}, err
+	}
+
+	dig := ref.Context().Digest(h.String())
+
+	if !shouldPushTags {
+		return PublishIndexDigest(ctx, idx, dig, logger, remoteOpts...)
+	}
+
+	if err := PublishIndexTags(ctx, idx, logger, tags, remoteOpts...); err != nil {
+		return name.Digest{}, err
+	}
+
+	return dig, nil
 }
 
-func buildIndexWithMediaType(outfile string, mediaType ggcrtypes.MediaType, _ types.ImageConfiguration, imgs map[types.Architecture]oci.SignedImage, tags []string, logger log.Logger) (name.Digest, error) {
+func BuildIndex(imgs map[types.Architecture]oci.SignedImage, docker bool) (oci.SignedImageIndex, error) {
+	mediaType := ggcrtypes.OCIImageIndex
+	if docker {
+		mediaType = ggcrtypes.DockerManifestList
+	}
 	idx := signed.ImageIndex(mutate.IndexMediaType(empty.Index, mediaType))
-	tagsToImages := make(map[name.Tag]v1.Image)
 	archs := make([]types.Architecture, 0, len(imgs))
 	for arch := range imgs {
 		archs = append(archs, arch)
@@ -603,37 +451,22 @@ func buildIndexWithMediaType(outfile string, mediaType ggcrtypes.MediaType, _ ty
 		return archs[i].String() < archs[j].String()
 	})
 	for _, arch := range archs {
-		logger.Printf("adding %s to index", arch)
 		img := imgs[arch]
 		mt, err := img.MediaType()
 		if err != nil {
-			return name.Digest{}, fmt.Errorf("failed to get mediatype for image: %w", err)
+			return nil, fmt.Errorf("failed to get mediatype: %w", err)
 		}
 
 		h, err := img.Digest()
 		if err != nil {
-			return name.Digest{}, fmt.Errorf("failed to compute digest for image: %w", err)
+			return nil, fmt.Errorf("failed to compute digest: %w", err)
 		}
 
 		size, err := img.Size()
 		if err != nil {
-			return name.Digest{}, fmt.Errorf("failed to compute size for image: %w", err)
+			return nil, fmt.Errorf("failed to compute size: %w", err)
 		}
-		for _, tagName := range tags {
-			ref, err := name.NewTag(tagName)
-			if err != nil {
-				return name.Digest{}, fmt.Errorf("failed to parse tag %s: %w", tagName, err)
-			}
-			ref, err = name.NewTag(fmt.Sprintf("%s-%s", ref.Name(), strings.ReplaceAll(arch.String(), "/", "_")))
-			if err != nil {
-				return name.Digest{}, fmt.Errorf("failed to parse tag %s: %w", tagName, err)
-			}
 
-			if err != nil {
-				return name.Digest{}, fmt.Errorf("failed to create tag for image: %w", err)
-			}
-			tagsToImages[ref] = img
-		}
 		idx = ocimutate.AppendManifests(idx, ocimutate.IndexAddendum{
 			Add: img,
 			Descriptor: v1.Descriptor{
@@ -644,11 +477,31 @@ func buildIndexWithMediaType(outfile string, mediaType ggcrtypes.MediaType, _ ty
 			},
 		})
 	}
+
+	return idx, nil
+}
+
+func WriteIndex(outfile string, idx v1.ImageIndex, logger log.Logger) (name.Digest, error) {
+	dir, err := os.MkdirTemp("", "apko-layout")
+	if err != nil {
+		return name.Digest{}, err
+	}
+	if _, err := layout.Write(dir, idx); err != nil {
+		return name.Digest{}, err
+	}
+
 	f, err := os.OpenFile(outfile, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return name.Digest{}, fmt.Errorf("failed to open outfile %s: %w", outfile, err)
 	}
 	defer f.Close()
+
+	fs := os.DirFS(dir)
+	tw, err := tarball.NewContext()
+	if err := tw.WriteTargz(context.TODO(), f, fs); err != nil {
+		return name.Digest{}, err
+	}
+
 	h, err := idx.Digest()
 	if err != nil {
 		return name.Digest{}, err
@@ -657,84 +510,10 @@ func buildIndexWithMediaType(outfile string, mediaType ggcrtypes.MediaType, _ ty
 	if err != nil {
 		return name.Digest{}, err
 	}
-	if err := v1tar.MultiWrite(tagsToImages, f); err != nil {
-		return name.Digest{}, fmt.Errorf("failed to write index to tgz: %w", err)
-	}
-
-	// to append to a tar archive, you need to find the last file in the archive
-	if _, err = f.Seek(0, io.SeekStart); err != nil {
-		return name.Digest{}, fmt.Errorf("failed to seek beginning of file: %w", err)
-	}
-
-	tr := tar.NewReader(f)
-	var lastFileSize, lastStreamPos int64
-	for {
-		hdr, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return name.Digest{}, fmt.Errorf("failed to read tar header: %w", err)
-		}
-		lastStreamPos, err = f.Seek(0, io.SeekCurrent)
-		if err != nil {
-			return name.Digest{}, fmt.Errorf("failed to get current position in file: %w", err)
-		}
-		lastFileSize = hdr.Size
-	}
-	const blockSize = 512
-	newOffset := lastStreamPos + lastFileSize
-	newOffset += blockSize - (newOffset % blockSize) // shift to next-nearest block boundary
-	if _, err := f.Seek(newOffset, io.SeekStart); err != nil {
-		return name.Digest{}, fmt.Errorf("failed to seek to new offset: %w", err)
-	}
-
-	tw := tar.NewWriter(f)
-	defer tw.Close()
-
-	// write each manifest file
-	for _, arch := range archs {
-		img := imgs[arch]
-		raw, err := img.RawManifest()
-		if err != nil {
-			return name.Digest{}, fmt.Errorf("failed to get raw manifest: %w", err)
-		}
-		dig, err := img.Digest()
-		if err != nil {
-			return name.Digest{}, fmt.Errorf("failed to get digest for manifest: %w", err)
-		}
-		if err := tw.WriteHeader(&tar.Header{
-			Name: dig.String(),
-			Size: int64(len(raw)),
-			Mode: 0o644,
-		}); err != nil {
-			return name.Digest{}, fmt.Errorf("failed to write manifest header: %w", err)
-		}
-		if _, err := tw.Write(raw); err != nil {
-			return name.Digest{}, fmt.Errorf("failed to write manifest: %w", err)
-		}
-	}
-
-	// Write the index.json
-	index, err := idx.RawManifest()
-	if err != nil {
-		return name.Digest{}, fmt.Errorf("failed to get raw index: %w", err)
-	}
-	if err := tw.WriteHeader(&tar.Header{
-		Name: "index.json",
-		Size: int64(len(index)),
-		Mode: 0o644,
-	}); err != nil {
-		return name.Digest{}, fmt.Errorf("failed to write index.json header: %w", err)
-	}
-	if _, err := tw.Write(index); err != nil {
-		return name.Digest{}, fmt.Errorf("failed to write index.json: %w", err)
-	}
-
 	return digest, nil
 }
 
-func writePeripherals(tag name.Reference, logger log.Logger, opt ...remote.Option) walk.Fn {
+func writePeripherals(repo name.Repository, logger log.Logger, opt ...remote.Option) walk.Fn {
 	ociOpts := []ociremote.Option{ociremote.WithRemoteOptions(opt...)}
 
 	// Respect COSIGN_REPOSITORY
@@ -753,7 +532,7 @@ func writePeripherals(tag name.Reference, logger log.Logger, opt ...remote.Optio
 		}
 
 		// TODO(mattmoor): We should have a WriteSBOM helper upstream.
-		digest := tag.Context().Digest(h.String()) // Don't *get* the tag, we know the digest
+		digest := repo.Digest(h.String()) // Don't *get* the tag, we know the digest
 		ref, err := ociremote.SBOMTag(digest, ociOpts...)
 		if err != nil {
 			return err
@@ -786,14 +565,4 @@ func writePeripherals(tag name.Reference, logger log.Logger, opt ...remote.Optio
 
 		return nil
 	}
-}
-
-func humanReadableImageType(mediaType ggcrtypes.MediaType) string {
-	switch mediaType {
-	case ggcrtypes.DockerLayer:
-		return "Docker"
-	case ggcrtypes.OCILayer:
-		return "OCI"
-	}
-	return "unknown"
 }
