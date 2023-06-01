@@ -54,6 +54,10 @@ func (sx *SPDX) Key() string {
 	return "spdx"
 }
 
+func (sx *SPDX) MediaType() string {
+	return "text/spdx+json"
+}
+
 func (sx *SPDX) Ext() string {
 	return "spdx.json"
 }

@@ -30,6 +30,7 @@ import (
 	"gitlab.alpinelinux.org/alpine/go/pkg/repository"
 
 	"chainguard.dev/apko/pkg/build/types"
+	"chainguard.dev/apko/pkg/log"
 	"chainguard.dev/apko/pkg/sbom/generator"
 	"chainguard.dev/apko/pkg/sbom/options"
 )
@@ -103,9 +104,7 @@ func (s *SBOM) ReadPackageIndex() error {
 // Generate creates the sboms according to the options set
 func (s *SBOM) Generate() ([]string, error) {
 	// s.Options.Logger().Infof("generating SBOM")
-	if err := s.impl.CheckGenerators(
-		&s.Options, s.Generators,
-	); err != nil {
+	if err := s.impl.CheckGenerators(&s.Options, s.Generators); err != nil {
 		return nil, err
 	}
 	files, err := s.impl.Generate(&s.Options, s.Generators)
@@ -189,14 +188,13 @@ func ReadPackageIndex(fsys fs.FS, opts *options.Options, path string) (packages 
 }
 
 // generate creates the documents according to the specified options
-func (di *defaultSBOMImplementation) Generate(
-	opts *options.Options, generators map[string]generator.Generator,
-) ([]string, error) {
+func (di *defaultSBOMImplementation) Generate(opts *options.Options, generators map[string]generator.Generator) ([]string, error) {
 	files := []string{}
 	for _, format := range opts.Formats {
 		path := filepath.Join(
 			opts.OutputDir, opts.FileName+"."+generators[format].Ext(),
 		)
+		log.DefaultLogger().Infof("writing sbom to %q", path)
 		if err := generators[format].Generate(opts, path); err != nil {
 			return nil, fmt.Errorf("generating %s sbom: %w", format, err)
 		}

@@ -271,6 +271,7 @@ func (bc *Context) ImageLayoutToLayer() (string, v1.Layer, error) {
 
 	// generate SBOM
 	if bc.Options.WantSBOM {
+		bc.Logger().Infof("GenerateSBOM")
 		if err := bc.GenerateSBOM(); err != nil {
 			return "", nil, fmt.Errorf("generating SBOMs: %w", err)
 		}

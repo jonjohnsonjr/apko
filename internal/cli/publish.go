@@ -321,10 +321,7 @@ func PublishCmd(ctx context.Context, outputRefs string, archs []types.Architectu
 			if bc.Options.WantSBOM {
 				bc.Logger().Infof("Generating %s SBOMs", arch)
 
-				if err := bc.GenerateImageSBOM(arch, simg); err != nil {
-					return fmt.Errorf("generating sbom for %s: %w", arch, err)
-				}
-
+				// TODO: Do this if we don't publish an index.
 				if _, err := oci.PostAttachSBOM(ctx, simg, bc.Options.SBOMPath, bc.Options.SBOMFormats, arch, bc.Logger(), bc.Options.Tags, ropt...); err != nil {
 					return fmt.Errorf("attaching sboms to %s image: %w", arch, err)
 				}

@@ -32,6 +32,7 @@ import (
 	"chainguard.dev/apko/internal/cli"
 	"chainguard.dev/apko/pkg/build"
 	"chainguard.dev/apko/pkg/build/types"
+	"chainguard.dev/apko/pkg/log"
 	"chainguard.dev/apko/pkg/sbom"
 )
 
@@ -59,7 +60,12 @@ func TestPublish(t *testing.T) {
 	outputRefs := ""
 	archs := types.ParseArchitectures([]string{"amd64", "arm64"})
 	ropt := []remote.Option{remote.WithTransport(st)}
-	opts := []build.Option{build.WithConfig(config), build.WithTags(dst), build.WithSBOMFormats(sbom.DefaultOptions.Formats)}
+	opts := []build.Option{
+		build.WithLogger(log.DefaultLogger()),
+		build.WithConfig(config),
+		build.WithTags(dst),
+		build.WithSBOMFormats(sbom.DefaultOptions.Formats),
+	}
 
 	err = cli.PublishCmd(ctx, outputRefs, archs, ropt, opts...)
 	require.NoError(t, err)

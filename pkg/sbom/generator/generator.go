@@ -30,6 +30,7 @@ import (
 type Generator interface {
 	Key() string
 	Ext() string
+	MediaType() string
 	Generate(*options.Options, string) error
 	GenerateIndex(*options.Options, string) error
 }

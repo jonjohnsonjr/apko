@@ -37,6 +37,10 @@ func (i *IDB) Key() string {
 	return "idb"
 }
 
+func (i *IDB) MediaType() string {
+	return "application/vnd.apko.installed-db"
+}
+
 func (i *IDB) Ext() string {
 	return "idb"
 }

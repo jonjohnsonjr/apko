@@ -33,12 +33,15 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	ggcrtypes "github.com/google/go-containerregistry/pkg/v1/types"
 	coci "github.com/sigstore/cosign/v2/pkg/oci"
+	ocimutate "github.com/sigstore/cosign/v2/pkg/oci/mutate"
+	"github.com/sigstore/cosign/v2/pkg/oci/static"
 	"gitlab.alpinelinux.org/alpine/go/repository"
 	khash "sigs.k8s.io/release-utils/hash"
 
 	chainguardAPK "chainguard.dev/apko/pkg/apk"
 	"chainguard.dev/apko/pkg/build/types"
 	"chainguard.dev/apko/pkg/exec"
+	"chainguard.dev/apko/pkg/log"
 	"chainguard.dev/apko/pkg/options"
 	"chainguard.dev/apko/pkg/s6"
 	"chainguard.dev/apko/pkg/sbom"
@@ -111,44 +114,62 @@ func (bc *Context) BuildTarball() (string, hash.Hash, hash.Hash, int64, error) {
 	return outfile.Name(), diffid, digest, stat.Size(), nil
 }
 
-// GenerateImageSBOM generates an sbom for an image
-func (bc *Context) GenerateImageSBOM(arch types.Architecture, img coci.SignedImage) error {
+// AttachImageSBOM generates an sbom for an image
+func (bc *Context) AttachImageSBOM(arch types.Architecture, img coci.SignedImage) (coci.SignedImage, error) {
 	bc.Options.Arch = arch
 
 	if len(bc.Options.SBOMFormats) == 0 {
 		bc.Logger().Warnf("skipping SBOM generation")
-		return nil
+		return img, nil
 	}
 
 	// TODO(jonjohnsonjr): Rewrite this.
 	s := newSBOM(bc.fs, &bc.Options, &bc.ImageConfiguration)
 
 	if err := s.ReadLayerTarball(bc.Options.TarballPath); err != nil {
-		return fmt.Errorf("reading layer tar: %w", err)
+		return nil, fmt.Errorf("reading layer tar: %w", err)
 	}
 
 	if err := s.ReadReleaseData(); err != nil {
-		return fmt.Errorf("getting os-release: %w", err)
+		return nil, fmt.Errorf("getting os-release: %w", err)
 	}
 
 	if err := s.ReadPackageIndex(); err != nil {
-		return fmt.Errorf("getting installed packages from sbom: %w", err)
+		return nil, fmt.Errorf("getting installed packages from sbom: %w", err)
 	}
 
 	// Get the image digest
 	h, err := img.Digest()
 	if err != nil {
-		return fmt.Errorf("getting %s image digest: %w", arch, err)
+		return nil, fmt.Errorf("getting %s image digest: %w", arch, err)
 	}
 
 	s.Options.ImageInfo.ImageDigest = h.String()
 	s.Options.ImageInfo.Arch = arch
 
-	if _, err := s.Generate(); err != nil {
-		return fmt.Errorf("generating SBOMs: %w", err)
+	for _, format := range s.Options.Formats {
+		gen := s.Generators[format]
+		path := filepath.Join(s.Options.OutputDir, s.Options.FileName+"."+gen.Ext())
+		log.DefaultLogger().Infof("writing sbom to %q", path)
+		if err := gen.Generate(&s.Options, path); err != nil {
+			return nil, fmt.Errorf("generating %s sbom: %w", format, err)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %q: %v", path, err)
+		}
+		mt := ggcrtypes.MediaType(gen.MediaType())
+		f, err := static.NewFile(b, static.WithLayerMediaType(mt))
+		if err != nil {
+			return nil, err
+		}
+		img, err = ocimutate.AttachFileToImage(img, "sbom", f)
+		if err != nil {
+			return nil, fmt.Errorf("attaching %s sbom to image: %w", err)
+		}
 	}
 
-	return nil
+	return img, nil
 }
 
 // GenerateSBOM generates an SBOM for an apko layer

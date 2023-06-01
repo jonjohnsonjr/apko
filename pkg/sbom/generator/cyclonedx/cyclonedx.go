@@ -38,6 +38,9 @@ func (cdx *CycloneDX) Key() string {
 	return "cyclonedx"
 }
 
+func (cdx *CycloneDX) MediaType() string {
+	return "application/vnd.cyclonedx+json"
+}
 func (cdx *CycloneDX) Ext() string {
 	return "cdx"
 }

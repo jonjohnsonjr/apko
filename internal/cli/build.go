@@ -24,7 +24,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	coci "github.com/sigstore/cosign/v2/pkg/oci"
 	"github.com/sigstore/cosign/v2/pkg/oci/signed"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
@@ -258,12 +257,11 @@ func BuildCmd(ctx context.Context, imageRef, outputTarGZ string, archs []types.A
 				return fmt.Errorf("failed to build OCI image: %w", err)
 			}
 
-			ent, err := oci.AttachSBOM(signed.Image(img), bc.Options.SBOMPath, bc.Options.SBOMFormats, arch, bc.Logger())
+			simg, err := bc.AttachImageSBOM(arch, signed.Image(img))
 			if err != nil {
-				return fmt.Errorf("attaching SBOM to image: %w", err)
+				return fmt.Errorf("attaching SBOM: %w", err)
 			}
 
-			simg := ent.(coci.SignedImage)
 			imageTars[arch] = layerTarGZ
 			imgs[arch] = simg
 			return nil
@@ -275,32 +273,6 @@ func BuildCmd(ctx context.Context, imageRef, outputTarGZ string, archs []types.A
 	bc.Options.SourceDateEpoch = multiArchBDE
 
 	bc.Options.SBOMFormats = formats
-	sbomPath := bc.Options.SBOMPath
-
-	if wantSBOM {
-		logrus.Info("Generating arch image SBOMs")
-		var g errgroup.Group
-		for arch, img := range imgs {
-			arch, img := arch, img
-			bc := contexts[arch]
-
-			// override the SBOM options
-			bc.Options.SBOMFormats = formats
-			bc.Options.WantSBOM = true
-			bc.Options.SBOMPath = sbomPath
-
-			g.Go(func() error {
-				if err := bc.GenerateImageSBOM(arch, img); err != nil {
-					return fmt.Errorf("generating sbom for %s: %w", arch, err)
-				}
-				return nil
-			})
-		}
-
-		if err := g.Wait(); err != nil {
-			return err
-		}
-	}
 
 	idx, err := oci.BuildIndex(imgs, bc.Options.UseDockerMediaTypes)
 	if err != nil {
