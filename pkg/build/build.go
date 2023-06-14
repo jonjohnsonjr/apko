@@ -207,6 +207,7 @@ func (bc *Context) ImageLayoutToLayer() (string, v1.Layer, error) {
 
 	return layerTarGZ, l, nil
 }
+
 func (bc *Context) runAssertions() error {
 	var eg multierror.Group
 

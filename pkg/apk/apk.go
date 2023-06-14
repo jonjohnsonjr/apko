@@ -117,6 +117,10 @@ func (a *APK) Install() error {
 	return a.impl.FixateWorld(&a.Options.SourceDateEpoch)
 }
 
+func (a *APK) Tiger() error {
+	return nil
+}
+
 // ResolvePackages gets list of packages that should be installed
 func (a *APK) ResolvePackages() (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
 	// sync reality with desired apk world
