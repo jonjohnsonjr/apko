@@ -266,6 +266,10 @@ func buildImageComponents(ctx context.Context, wd string, archs []types.Architec
 			}
 			bc.Options.TarballPath = filepath.Join(imageDir, bc.Options.TarballFileName())
 
+			if err := bc.Tiger(); err != nil {
+				return err
+			}
+
 			layerTarGZ, layer, err := bc.BuildLayer()
 			if err != nil {
 				return fmt.Errorf("failed to build layer image for %q: %w", arch, err)

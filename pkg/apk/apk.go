@@ -18,11 +18,13 @@ package apk
 
 import (
 	"archive/tar"
+	"context"
 	"fmt"
 	"io/fs"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	apkimpl "github.com/chainguard-dev/go-apk/pkg/apk"
 	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
@@ -70,19 +72,23 @@ func NewWithOptions(fsys apkfs.FullFS, o options.Options) (*APK, error) {
 
 type Option func(*APK) error
 
+func (a *APK) Combine(ctx context.Context, sde *time.Time) error {
+	return a.impl.Combine(ctx, sde)
+}
+
 // Initialize sets the image in Context.WorkDir according to the image configuration,
 // and does everything short of installing the packages.
 func (a *APK) Initialize(ic *types.ImageConfiguration) error {
 	// initialize apk
 	alpineVersions := parseOptionsFromRepositories(ic.Contents.Repositories)
-	if err := a.impl.InitDB(alpineVersions...); err != nil {
+	if err := a.impl.InitDB(context.TODO(), alpineVersions...); err != nil {
 		return fmt.Errorf("failed to initialize apk database: %w", err)
 	}
 
 	var eg errgroup.Group
 
 	eg.Go(func() error {
-		if err := a.impl.InitKeyring(ic.Contents.Keyring, a.Options.ExtraKeyFiles); err != nil {
+		if err := a.impl.InitKeyring(context.TODO(), ic.Contents.Keyring, a.Options.ExtraKeyFiles); err != nil {
 			return fmt.Errorf("failed to initialize apk keyring: %w", err)
 		}
 		return nil
@@ -114,7 +120,7 @@ func (a *APK) Initialize(ic *types.ImageConfiguration) error {
 // Install install packages. Only works if already initialized.
 func (a *APK) Install() error {
 	// sync reality with desired apk world
-	return a.impl.FixateWorld(&a.Options.SourceDateEpoch)
+	return a.impl.FixateWorld(context.TODO(), &a.Options.SourceDateEpoch)
 }
 
 func (a *APK) Tiger() error {
@@ -124,7 +130,7 @@ func (a *APK) Tiger() error {
 // ResolvePackages gets list of packages that should be installed
 func (a *APK) ResolvePackages() (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
 	// sync reality with desired apk world
-	return a.impl.ResolveWorld()
+	return a.impl.ResolveWorld(context.TODO())
 }
 
 func (a *APK) GetInstalled() ([]*apkimpl.InstalledPackage, error) {

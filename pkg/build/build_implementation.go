@@ -271,6 +271,7 @@ func buildImage(
 		return fmt.Errorf("installing apk packages: %w", err)
 	}
 
+	// Kill this?
 	if err := di.AdditionalTags(fsys, o); err != nil {
 		return fmt.Errorf("adding additional tags: %w", err)
 	}
@@ -308,6 +309,34 @@ func buildImage(
 	// add necessary character devices
 	if err := di.InstallCharDevices(fsys); err != nil {
 		return err
+	}
+
+	o.Logger().Infof("finished building filesystem in %s", o.WorkDir)
+
+	return nil
+}
+
+func buildImage2(
+	fsys apkfs.FullFS, di *buildImplementation, o *options.Options, ic *types.ImageConfiguration,
+	s6context *s6.Context,
+) error {
+	o.Logger().Infof("doing pre-flight checks")
+	if err := di.ValidateImageConfiguration(ic); err != nil {
+		return fmt.Errorf("failed to validate configuration: %w", err)
+	}
+
+	o.Logger().Infof("building image fileystem in %s", o.WorkDir)
+
+	if err := di.InitializeApk(fsys, o, ic); err != nil {
+		return fmt.Errorf("initializing apk: %w", err)
+	}
+
+	apk, err := chainguardAPK.NewWithOptions(fsys, *o)
+	if err != nil {
+		return err
+	}
+	if err := apk.Combine(context.TODO(), &o.SourceDateEpoch); err != nil {
+		return fmt.Errorf("installing apk packages: %w", err)
 	}
 
 	o.Logger().Infof("finished building filesystem in %s", o.WorkDir)

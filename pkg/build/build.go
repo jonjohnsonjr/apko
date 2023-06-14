@@ -133,6 +133,11 @@ func (bc *Context) BuildImage() (fs.FS, error) {
 	return bc.fs, nil
 }
 
+func (bc *Context) Tiger() error {
+	// TODO(puerco): Point to final interface (see comment on buildImage fn)
+	return buildImage2(bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration, bc.s6)
+}
+
 func (bc *Context) BuildPackageList() (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
 	// TODO(puerco): Point to final interface (see comment on buildImage fn)
 	return buildPackageList(bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration)
