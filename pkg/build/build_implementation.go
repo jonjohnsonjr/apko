@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"go.opentelemetry.io/otel"
 	gzip "golang.org/x/build/pargzip"
 
 	apkimpl "github.com/chainguard-dev/go-apk/pkg/apk"
@@ -70,7 +71,9 @@ func (di *buildImplementation) Refresh(o *options.Options) (*s6.Context, *exec.E
 	return s6.New(di.workdirFS, o.Logger()), executor, nil
 }
 
-func (di *buildImplementation) BuildTarball(o *options.Options, fsys fs.FS) (string, hash.Hash, hash.Hash, int64, error) {
+func (di *buildImplementation) BuildTarball(ctx context.Context, o *options.Options, fsys fs.FS) (string, hash.Hash, hash.Hash, int64, error) {
+	ctx, span := otel.Tracer("apko").Start(ctx, "BuildTarball")
+	defer span.End()
 	var outfile *os.File
 	var err error
 
@@ -99,7 +102,7 @@ func (di *buildImplementation) BuildTarball(o *options.Options, fsys fs.FS) (str
 
 	diffid := sha256.New()
 
-	if err := tw.WriteTar(context.TODO(), io.MultiWriter(diffid, gzw), fsys); err != nil {
+	if err := tw.WriteTar(ctx, io.MultiWriter(diffid, gzw), fsys); err != nil {
 		return "", nil, nil, 0, fmt.Errorf("failed to generate tarball for image: %w", err)
 	}
 	if err := gzw.Close(); err != nil {
@@ -236,9 +239,10 @@ func (di *buildImplementation) AdditionalTags(fsys apkfs.FullFS, o *options.Opti
 }
 
 func (di *buildImplementation) BuildImage(
+	ctx context.Context,
 	o *options.Options, ic *types.ImageConfiguration, e *exec.Executor, s6context *s6.Context,
 ) (fs.FS, error) {
-	if err := buildImage(di.workdirFS, di, o, ic, s6context); err != nil {
+	if err := buildImage(ctx, di.workdirFS, di, o, ic, s6context); err != nil {
 		return nil, err
 	}
 	return di.workdirFS, nil
@@ -253,9 +257,13 @@ func (di *buildImplementation) BuildImage(
 // TODO(puerco): In order to have a structure we can mock, we need to split
 // image building to its own interface or split out to its own package.
 func buildImage(
+	ctx context.Context,
 	fsys apkfs.FullFS, di *buildImplementation, o *options.Options, ic *types.ImageConfiguration,
 	s6context *s6.Context,
 ) error {
+	ctx, span := otel.Tracer("apko").Start(ctx, "buildImage")
+	defer span.End()
+
 	o.Logger().Infof("doing pre-flight checks")
 	if err := di.ValidateImageConfiguration(ic); err != nil {
 		return fmt.Errorf("failed to validate configuration: %w", err)
@@ -317,6 +325,7 @@ func buildImage(
 }
 
 func buildImage2(
+	ctx context.Context,
 	fsys apkfs.FullFS, di *buildImplementation, o *options.Options, ic *types.ImageConfiguration,
 	s6context *s6.Context,
 ) error {
@@ -335,7 +344,7 @@ func buildImage2(
 	if err != nil {
 		return err
 	}
-	if err := apk.Combine(context.TODO(), &o.SourceDateEpoch); err != nil {
+	if err := apk.Combine(ctx, &o.SourceDateEpoch); err != nil {
 		return fmt.Errorf("installing apk packages: %w", err)
 	}
 

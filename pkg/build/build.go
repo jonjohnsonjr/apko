@@ -18,6 +18,7 @@ package build
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"hash"
@@ -36,6 +37,7 @@ import (
 	"github.com/hashicorp/go-multierror"
 	coci "github.com/sigstore/cosign/v2/pkg/oci"
 	"gitlab.alpinelinux.org/alpine/go/repository"
+	"go.opentelemetry.io/otel"
 	"gopkg.in/yaml.v3"
 
 	"chainguard.dev/apko/pkg/build/types"
@@ -72,8 +74,8 @@ func (bc *Context) Summarize() {
 // BuildTarball calls the underlying implementation's BuildTarball
 // which takes the fully populated working directory and saves it to
 // an OCI image layer tar.gz file.
-func (bc *Context) BuildTarball() (string, hash.Hash, hash.Hash, int64, error) {
-	return bc.impl.BuildTarball(&bc.Options, bc.fs)
+func (bc *Context) BuildTarball(ctx context.Context) (string, hash.Hash, hash.Hash, int64, error) {
+	return bc.impl.BuildTarball(ctx, &bc.Options, bc.fs)
 }
 
 // WriteIndex calls the underlying implementation's WriteIndex
@@ -117,9 +119,11 @@ func (bc *Context) GetBuildDateEpoch() (time.Time, error) {
 	return bde, nil
 }
 
-func (bc *Context) BuildImage() (fs.FS, error) {
+func (bc *Context) BuildImage(ctx context.Context) (fs.FS, error) {
+	ctx, span := otel.Tracer("apko").Start(ctx, "BuildImage")
+	defer span.End()
 	// TODO(puerco): Point to final interface (see comment on buildImage fn)
-	if err := buildImage(bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration, bc.s6); err != nil {
+	if err := buildImage(ctx, bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration, bc.s6); err != nil {
 		logger := bc.Options.Logger()
 		logger.Debugf("buildImage failed: %v", err)
 		b, err2 := yaml.Marshal(bc.ImageConfiguration)
@@ -133,9 +137,9 @@ func (bc *Context) BuildImage() (fs.FS, error) {
 	return bc.fs, nil
 }
 
-func (bc *Context) Tiger() error {
+func (bc *Context) Tiger(ctx context.Context) error {
 	// TODO(puerco): Point to final interface (see comment on buildImage fn)
-	return buildImage2(bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration, bc.s6)
+	return buildImage2(ctx, bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration, bc.s6)
 }
 
 func (bc *Context) BuildPackageList() (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
@@ -154,27 +158,29 @@ func (bc *Context) Logger() log.Logger {
 // and sets everything up in the directory. Then
 // packages it all up into a standard OCI image layer
 // tar.gz file.
-func (bc *Context) BuildLayer() (string, v1.Layer, error) {
+func (bc *Context) BuildLayer(ctx context.Context) (string, v1.Layer, error) {
+	ctx, span := otel.Tracer("apko").Start(ctx, "BuildLayer")
+	defer span.End()
 	bc.Summarize()
 
 	// build image filesystem
-	if _, err := bc.BuildImage(); err != nil {
+	if _, err := bc.BuildImage(ctx); err != nil {
 		return "", nil, err
 	}
 
-	return bc.ImageLayoutToLayer()
+	return bc.ImageLayoutToLayer(ctx)
 }
 
 // ImageLayoutToLayer given an already built-out
 // image in an fs from BuildImage(), create
 // an OCI image layer tgz.
-func (bc *Context) ImageLayoutToLayer() (string, v1.Layer, error) {
+func (bc *Context) ImageLayoutToLayer(ctx context.Context) (string, v1.Layer, error) {
 	// run any assertions defined
 	if err := bc.runAssertions(); err != nil {
 		return "", nil, err
 	}
 
-	layerTarGZ, diffid, digest, size, err := bc.BuildTarball()
+	layerTarGZ, diffid, digest, size, err := bc.BuildTarball(ctx)
 	// build layer tarball
 	if err != nil {
 		return "", nil, err
