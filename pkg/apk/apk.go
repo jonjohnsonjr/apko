@@ -30,6 +30,7 @@ import (
 	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 	"github.com/google/go-containerregistry/pkg/name"
 	"gitlab.alpinelinux.org/alpine/go/repository"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
 
 	"chainguard.dev/apko/pkg/build/types"
@@ -78,17 +79,20 @@ func (a *APK) Combine(ctx context.Context, sde *time.Time) error {
 
 // Initialize sets the image in Context.WorkDir according to the image configuration,
 // and does everything short of installing the packages.
-func (a *APK) Initialize(ic *types.ImageConfiguration) error {
+func (a *APK) Initialize(ctx context.Context, ic *types.ImageConfiguration) error {
+	ctx, span := otel.Tracer("apko").Start(ctx, "Initialize")
+	defer span.End()
+
 	// initialize apk
 	alpineVersions := parseOptionsFromRepositories(ic.Contents.Repositories)
-	if err := a.impl.InitDB(context.TODO(), alpineVersions...); err != nil {
+	if err := a.impl.InitDB(ctx, alpineVersions...); err != nil {
 		return fmt.Errorf("failed to initialize apk database: %w", err)
 	}
 
 	var eg errgroup.Group
 
 	eg.Go(func() error {
-		if err := a.impl.InitKeyring(context.TODO(), ic.Contents.Keyring, a.Options.ExtraKeyFiles); err != nil {
+		if err := a.impl.InitKeyring(ctx, ic.Contents.Keyring, a.Options.ExtraKeyFiles); err != nil {
 			return fmt.Errorf("failed to initialize apk keyring: %w", err)
 		}
 		return nil
@@ -96,7 +100,7 @@ func (a *APK) Initialize(ic *types.ImageConfiguration) error {
 
 	eg.Go(func() error {
 		repos := append(ic.Contents.Repositories, a.Options.ExtraRepos...) // nolint:gocritic
-		if err := a.impl.SetRepositories(repos); err != nil {
+		if err := a.impl.SetRepositories(ctx, repos); err != nil {
 			return fmt.Errorf("failed to initialize apk repositories: %w", err)
 		}
 		return nil
@@ -104,7 +108,7 @@ func (a *APK) Initialize(ic *types.ImageConfiguration) error {
 
 	eg.Go(func() error {
 		packages := append(ic.Contents.Packages, a.Options.ExtraPackages...) //nolint:gocritic
-		if err := a.impl.SetWorld(packages); err != nil {
+		if err := a.impl.SetWorld(ctx, packages); err != nil {
 			return fmt.Errorf("failed to initialize apk world: %w", err)
 		}
 		return nil
@@ -118,9 +122,9 @@ func (a *APK) Initialize(ic *types.ImageConfiguration) error {
 }
 
 // Install install packages. Only works if already initialized.
-func (a *APK) Install() error {
+func (a *APK) Install(ctx context.Context) error {
 	// sync reality with desired apk world
-	return a.impl.FixateWorld(context.TODO(), &a.Options.SourceDateEpoch)
+	return a.impl.FixateWorld(ctx, &a.Options.SourceDateEpoch)
 }
 
 func (a *APK) Tiger() error {
@@ -128,9 +132,9 @@ func (a *APK) Tiger() error {
 }
 
 // ResolvePackages gets list of packages that should be installed
-func (a *APK) ResolvePackages() (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
+func (a *APK) ResolvePackages(ctx context.Context) (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
 	// sync reality with desired apk world
-	return a.impl.ResolveWorld(context.TODO())
+	return a.impl.ResolveWorld(ctx)
 }
 
 func (a *APK) GetInstalled() ([]*apkimpl.InstalledPackage, error) {

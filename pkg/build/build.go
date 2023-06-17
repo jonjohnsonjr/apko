@@ -142,9 +142,9 @@ func (bc *Context) Tiger(ctx context.Context) error {
 	return buildImage2(ctx, bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration, bc.s6)
 }
 
-func (bc *Context) BuildPackageList() (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
+func (bc *Context) BuildPackageList(ctx context.Context) (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
 	// TODO(puerco): Point to final interface (see comment on buildImage fn)
-	return buildPackageList(bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration)
+	return buildPackageList(ctx, bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration)
 }
 
 func (bc *Context) Logger() log.Logger {

@@ -194,20 +194,20 @@ func (di *buildImplementation) GenerateSBOM(o *options.Options, ic *types.ImageC
 	return nil
 }
 
-func (di *buildImplementation) InitializeApk(fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration) error {
+func (di *buildImplementation) InitializeApk(ctx context.Context, fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration) error {
 	apk, err := chainguardAPK.NewWithOptions(fsys, *o)
 	if err != nil {
 		return err
 	}
-	return apk.Initialize(ic)
+	return apk.Initialize(ctx, ic)
 }
 
-func (di *buildImplementation) InstallPackages(fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration) error {
+func (di *buildImplementation) InstallPackages(ctx context.Context, fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration) error {
 	apk, err := chainguardAPK.NewWithOptions(fsys, *o)
 	if err != nil {
 		return err
 	}
-	return apk.Install()
+	return apk.Install(ctx)
 }
 
 func (di *buildImplementation) InstalledPackages(fsys apkfs.FullFS, o *options.Options) ([]*apkimpl.InstalledPackage, error) {
@@ -218,12 +218,12 @@ func (di *buildImplementation) InstalledPackages(fsys apkfs.FullFS, o *options.O
 	return apk.GetInstalled()
 }
 
-func (di *buildImplementation) ResolvePackages(fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration) (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
+func (di *buildImplementation) ResolvePackages(ctx context.Context, fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration) (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
 	apk, err := chainguardAPK.NewWithOptions(fsys, *o)
 	if err != nil {
 		return nil, nil, err
 	}
-	return apk.ResolvePackages()
+	return apk.ResolvePackages(ctx)
 }
 
 func (di *buildImplementation) AdditionalTags(fsys apkfs.FullFS, o *options.Options) error {
@@ -271,11 +271,11 @@ func buildImage(
 
 	o.Logger().Infof("building image fileystem in %s", o.WorkDir)
 
-	if err := di.InitializeApk(fsys, o, ic); err != nil {
+	if err := di.InitializeApk(ctx, fsys, o, ic); err != nil {
 		return fmt.Errorf("initializing apk: %w", err)
 	}
 
-	if err := di.InstallPackages(fsys, o, ic); err != nil {
+	if err := di.InstallPackages(ctx, fsys, o, ic); err != nil {
 		return fmt.Errorf("installing apk packages: %w", err)
 	}
 
@@ -336,7 +336,7 @@ func buildImage2(
 
 	o.Logger().Infof("building image fileystem in %s", o.WorkDir)
 
-	if err := di.InitializeApk(fsys, o, ic); err != nil {
+	if err := di.InitializeApk(ctx, fsys, o, ic); err != nil {
 		return fmt.Errorf("initializing apk: %w", err)
 	}
 
@@ -375,6 +375,7 @@ func (di *buildImplementation) WriteIndex(o *options.Options, idx coci.SignedIma
 }
 
 func buildPackageList(
+	ctx context.Context,
 	fsys apkfs.FullFS, di *buildImplementation, o *options.Options, ic *types.ImageConfiguration,
 ) (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
 	o.Logger().Infof("doing pre-flight checks")
@@ -384,11 +385,11 @@ func buildPackageList(
 
 	o.Logger().Infof("building apk info in %s", o.WorkDir)
 
-	if err := di.InitializeApk(fsys, o, ic); err != nil {
+	if err := di.InitializeApk(ctx, fsys, o, ic); err != nil {
 		return toInstall, conflicts, fmt.Errorf("initializing apk: %w", err)
 	}
 
-	if toInstall, conflicts, err = di.ResolvePackages(fsys, o, ic); err != nil {
+	if toInstall, conflicts, err = di.ResolvePackages(ctx, fsys, o, ic); err != nil {
 		return toInstall, conflicts, fmt.Errorf("resolving apk packages: %w", err)
 	}
 	o.Logger().Infof("finished gathering apk info in %s", o.WorkDir)
