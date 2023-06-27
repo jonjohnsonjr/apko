@@ -15,8 +15,11 @@
 package build
 
 import (
+	"archive/tar"
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -127,6 +130,99 @@ func (di *buildImplementation) GenerateOSRelease(
 	}
 
 	if err := maybeGenerateVendorReleaseFile(fsys, ic); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// We assume it does not exist already.
+func AppendOSRelease(tw *tar.Writer, ic *types.ImageConfiguration) error {
+	path := filepath.Join("etc", "os-release")
+
+	w := &bytes.Buffer{}
+
+	if ic.OSRelease.ID != "" {
+		_, err := fmt.Fprintf(w, "ID=%s\n", ic.OSRelease.ID)
+		if err != nil {
+			return err
+		}
+	}
+
+	if ic.OSRelease.Name != "" {
+		_, err := fmt.Fprintf(w, "NAME=\"%s\"\n", ic.OSRelease.Name)
+		if err != nil {
+			return err
+		}
+	}
+
+	if ic.OSRelease.PrettyName != "" {
+		_, err := fmt.Fprintf(w, "PRETTY_NAME=\"%s\"\n", ic.OSRelease.PrettyName)
+		if err != nil {
+			return err
+		}
+	}
+
+	if ic.OSRelease.VersionID != "" {
+		_, err := fmt.Fprintf(w, "VERSION_ID=%s\n", ic.OSRelease.VersionID)
+		if err != nil {
+			return err
+		}
+	}
+
+	if ic.OSRelease.HomeURL != "" {
+		_, err := fmt.Fprintf(w, "HOME_URL=\"%s\"\n", ic.OSRelease.HomeURL)
+		if err != nil {
+			return err
+		}
+	}
+
+	if ic.OSRelease.BugReportURL != "" {
+		_, err := fmt.Fprintf(w, "BUG_REPORT_URL=\"%s\"\n", ic.OSRelease.BugReportURL)
+		if err != nil {
+			return err
+		}
+	}
+
+	hdr := tar.Header{
+		Name: path,
+		Size: int64(w.Len()),
+	}
+	if err := tw.WriteHeader(&hdr); err != nil {
+		return err
+	}
+	if _, err := io.Copy(tw, w); err != nil {
+		return err
+	}
+
+	if err := appendVendorReleaseFile(tw, ic); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func appendVendorReleaseFile(tw *tar.Writer, ic *types.ImageConfiguration) error {
+	if ic.OSRelease.ID == "" || ic.OSRelease.VersionID == "" {
+		return nil
+	}
+
+	path := filepath.Join("etc", fmt.Sprintf("%s-release", ic.OSRelease.ID))
+
+	w := &bytes.Buffer{}
+
+	if _, err := fmt.Fprintf(w, "%s\n", ic.OSRelease.VersionID); err != nil {
+		return err
+	}
+
+	hdr := tar.Header{
+		Name: path,
+		Size: int64(w.Len()),
+	}
+	if err := tw.WriteHeader(&hdr); err != nil {
+		return err
+	}
+	if _, err := io.Copy(tw, w); err != nil {
 		return err
 	}
 

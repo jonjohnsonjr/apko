@@ -54,6 +54,7 @@ var busyboxLinks map[string][]string
 // so this should be updated to match busybox version.
 
 func (di *buildImplementation) InstallBusyboxLinks(fsys apkfs.FullFS, o *options.Options) error {
+	// TODO(jonjohnsonjr): Skip this and rely on GetInstalled.
 	// does busybox exist? if not, do not bother with symlinks
 	if _, err := fsys.Stat(busybox); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {

@@ -38,7 +38,6 @@ import (
 	coci "github.com/sigstore/cosign/v2/pkg/oci"
 	"gitlab.alpinelinux.org/alpine/go/repository"
 	"go.opentelemetry.io/otel"
-	"gopkg.in/yaml.v3"
 
 	"chainguard.dev/apko/pkg/build/types"
 	"chainguard.dev/apko/pkg/exec"
@@ -119,26 +118,14 @@ func (bc *Context) GetBuildDateEpoch() (time.Time, error) {
 	return bde, nil
 }
 
-func (bc *Context) BuildImage(ctx context.Context) (fs.FS, error) {
+func (bc *Context) _BuildImage(ctx context.Context) (fs.FS, error) {
 	ctx, span := otel.Tracer("apko").Start(ctx, "BuildImage")
 	defer span.End()
 	// TODO(puerco): Point to final interface (see comment on buildImage fn)
-	if err := buildImage(ctx, bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration, bc.s6); err != nil {
-		logger := bc.Options.Logger()
-		logger.Debugf("buildImage failed: %v", err)
-		b, err2 := yaml.Marshal(bc.ImageConfiguration)
-		if err2 != nil {
-			logger.Debugf("failed to marshal image configuration: %v", err2)
-		} else {
-			logger.Debugf("image configuration:\n%s", string(b))
-		}
-		return nil, err
-	}
 	return bc.fs, nil
 }
 
 func (bc *Context) Tiger(ctx context.Context) error {
-	// TODO(puerco): Point to final interface (see comment on buildImage fn)
 	return buildImage2(ctx, bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration, bc.s6)
 }
 
@@ -164,7 +151,7 @@ func (bc *Context) BuildLayer(ctx context.Context) (string, v1.Layer, error) {
 	bc.Summarize()
 
 	// build image filesystem
-	if _, err := bc.BuildImage(ctx); err != nil {
+	if err := buildImage(ctx, bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration, bc.s6); err != nil {
 		return "", nil, err
 	}
 

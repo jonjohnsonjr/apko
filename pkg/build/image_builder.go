@@ -15,7 +15,11 @@
 package build
 
 import (
+	"archive/tar"
+	"bytes"
 	"fmt"
+	"io"
+	"path/filepath"
 
 	"chainguard.dev/apko/pkg/build/types"
 	"chainguard.dev/apko/pkg/s6"
@@ -39,5 +43,39 @@ func (di *buildImplementation) WriteSupervisionTree(
 	if err := s6context.WriteSupervisionTree(s6m); err != nil {
 		return fmt.Errorf("failed to write supervision tree: %w", err)
 	}
+	return nil
+}
+
+// Inlined form of WriteSupervisionTree.
+func AppendSupervisionTree(tw *tar.Writer, ic *types.ImageConfiguration) error {
+	for service, command := range ic.Entrypoint.Services {
+		svcdir := filepath.Join("sv", service)
+
+		dir := &tar.Header{
+			Name:     svcdir,
+			Typeflag: tar.TypeDir,
+			Mode:     0777,
+		}
+		if err := tw.WriteHeader(dir); err != nil {
+			return fmt.Errorf("could not make supervision directory %q: %w", svcdir, err)
+		}
+
+		w := &bytes.Buffer{}
+		fmt.Fprintf(w, "#!/bin/execlineb\n%s\n", command)
+
+		filename := filepath.Join(svcdir, "run")
+		hdr := &tar.Header{
+			Name: filename,
+			Mode: 0755,
+			Size: int64(w.Len()),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return fmt.Errorf("could not create runfile %q: %w", filename, err)
+		}
+		if _, err := io.Copy(tw, w); err != nil {
+			return fmt.Errorf("could not write runfile %q: %w", filename, err)
+		}
+	}
+
 	return nil
 }

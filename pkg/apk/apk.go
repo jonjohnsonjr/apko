@@ -20,6 +20,7 @@ import (
 	"archive/tar"
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"regexp"
 	"sort"
@@ -56,13 +57,17 @@ func NewWithOptions(fsys apkfs.FullFS, o options.Options) (*APK, error) {
 
 	// apko does not execute the scripts, so they do not matter. This buys us flexibility
 	// to run without root privileges, or even on non-Linux.
-	apkImpl, _ := apkimpl.New(
+	apkImpl, err := apkimpl.New(
 		apkimpl.WithFS(fsys),
 		apkimpl.WithLogger(o.Logger()),
 		apkimpl.WithArch(o.Arch.ToAPK()),
 		apkimpl.WithIgnoreMknodErrors(true),
 		apkimpl.WithCache(o.CacheDir),
 	)
+	if err != nil {
+		return nil, err
+	}
+
 	a := &APK{
 		Options: o,
 		impl:    apkImpl,
@@ -73,8 +78,8 @@ func NewWithOptions(fsys apkfs.FullFS, o options.Options) (*APK, error) {
 
 type Option func(*APK) error
 
-func (a *APK) Combine(ctx context.Context, sde *time.Time) error {
-	return a.impl.Combine(ctx, sde)
+func (a *APK) Combine(ctx context.Context, w io.Writer, sde *time.Time) error {
+	return a.impl.Combine(ctx, w, sde)
 }
 
 // Initialize sets the image in Context.WorkDir according to the image configuration,
