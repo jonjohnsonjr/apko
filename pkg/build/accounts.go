@@ -15,6 +15,7 @@
 package build
 
 import (
+	"archive/tar"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -151,6 +152,98 @@ func (di *buildImplementation) MutateAccounts(
 
 	if err := eg.Wait(); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+// Assumes these files do not already exist.
+func AppendAccounts(tw *tar.Writer, fsys apkfs.FullFS, ic *types.ImageConfiguration) error {
+	if len(ic.Accounts.Groups) != 0 {
+		// Mutate the /etc/groups file
+		path := filepath.Join("etc", "group")
+
+		gf := passwd.GroupFile{}
+
+		for _, g := range ic.Accounts.Groups {
+			ge := passwd.GroupEntry{
+				GroupName: g.GroupName,
+				GID:       g.GID,
+				Members:   g.Members,
+				Password:  "x",
+			}
+
+			gf.Entries = append(gf.Entries, ge)
+		}
+
+		// TODO(jonjohnsonjr): copy into tw
+		if err := gf.WriteFile(fsys, path); err != nil {
+			return err
+		}
+	}
+
+	// Mutate the /etc/passwd file
+	path := filepath.Join("etc", "passwd")
+
+	uf := passwd.UserFile{}
+
+	for _, u := range ic.Accounts.Users {
+		ue := userToUserEntry(u)
+		uf.Entries = append(uf.Entries, ue)
+	}
+	for _, ue := range uf.Entries {
+		// This is what the home directory is set to for our homeless users.
+		if ue.HomeDir == "/dev/null" {
+			continue
+		}
+		// Create a version of the user's home directory rooted at our
+		// working directory.
+		targetHomedir := ue.HomeDir
+
+		// Make sure a directory exists with the path we expect.
+		if fi, err := fsys.Stat(targetHomedir); err == nil {
+			if !fi.IsDir() {
+				return fmt.Errorf("%s home directory %s exists, but is not a directory", ue.UserName, ue.HomeDir)
+			}
+			// TODO(jonjohnsonjr): Do we really need to care about this?
+			//                     Maybe pass in a list of existing files?
+
+			// If the directory already exists, we do not mess with the
+			// permissions because some built-in users use things like:
+			//    /bin, /sbin, /
+			// and we don't want to screw with those permissions.
+			continue
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("checking homedir exists: %w", err)
+		}
+		// Create the directory. Only the directory should be 0o700; parents, if they are missing, should be 0o755.
+		parent := filepath.Dir(targetHomedir)
+		if err := fsys.MkdirAll(parent, 0o755); err != nil {
+			return fmt.Errorf("creating parent %s: %w", parent, err)
+		}
+		if err := fsys.Mkdir(targetHomedir, 0o700); err != nil {
+			return fmt.Errorf("creating homedir: %w", err)
+		}
+		if err := fsys.Chown(targetHomedir, int(ue.UID), int(ue.GID)); err != nil {
+			return fmt.Errorf("chowning homedir: %w", err)
+		}
+	}
+
+	// TODO(jonjohnsonjr): copy into tw
+	if err := uf.WriteFile(path); err != nil {
+		return err
+	}
+
+	// TODO(jonjohnsonjr): AHHHHHHHHHHHHHHHHHHHHHHHHH.
+
+	// Resolve run-as user if requested.
+	if ic.Accounts.RunAs != "" {
+		for _, ue := range uf.Entries {
+			if ue.UserName == ic.Accounts.RunAs {
+				ic.Accounts.RunAs = fmt.Sprintf("%d", ue.UID)
+				break
+			}
+		}
 	}
 
 	return nil
