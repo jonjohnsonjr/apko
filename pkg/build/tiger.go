@@ -19,11 +19,6 @@ import (
 	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 )
 
-type tarfile struct {
-	hdr     *tar.Header
-	content []byte
-}
-
 type countWriter struct {
 	n int64
 }
@@ -75,7 +70,7 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 			return err
 		}
 
-		// TODO: We should not need to do this.
+		// TODO: We should not need to do this, but SBOMs assume it.
 		if err := a.Initialize(ctx, ic); err != nil {
 			return fmt.Errorf("failed to initialize apk: %w", err)
 		}
@@ -87,6 +82,8 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 			return fmt.Errorf("creating etc/os-release: %w", err)
 		}
 
+		// TODO: We probably want to append these last to overwrite existing stuff.
+		// Alternatively, we can keep a list of files to omit and pass that to SplitAPK.
 		arch := o.Arch.ToAPK()
 		if err := goapk.AppendInitFiles(tw, arch); err != nil {
 			return fmt.Errorf("failed to initialize apk database: %w", err)
@@ -181,32 +178,51 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 			splits = append(splits, split)
 		}
 
+		installedFile, err := fsys.OpenFile("lib/apk/db/installed", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("could not open installed file for write: %w", err)
+		}
+
+		defer installedFile.Close()
 		scriptData := &bytes.Buffer{}
 		triggerData := &bytes.Buffer{}
 		installedData := &bytes.Buffer{}
 
+		// TODO: Remove the need for this (SBOMs assume it).
+		// TODO: We also need SBOM to contain files, not just packages.
+		instmw := io.MultiWriter(installedData, installedFile)
+
 		for _, split := range splits {
-			scripts, err := split.Scripts()
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(scriptData, scripts); err != nil {
-				return err
-			}
+			if err := func() error {
+				scripts, err := split.Scripts()
+				if err != nil {
+					return err
+				}
+				defer scripts.Close()
+				if _, err := io.Copy(scriptData, scripts); err != nil {
+					return err
+				}
 
-			triggers, err := split.Triggers()
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(triggerData, triggers); err != nil {
-				return err
-			}
+				triggers, err := split.Triggers()
+				if err != nil {
+					return err
+				}
+				defer triggers.Close()
+				if _, err := io.Copy(triggerData, triggers); err != nil {
+					return err
+				}
 
-			installed, err := split.Installed()
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(installedData, installed); err != nil {
+				installed, err := split.Installed()
+				if err != nil {
+					return err
+				}
+				defer installed.Close()
+				if _, err := io.Copy(instmw, installed); err != nil {
+					return err
+				}
+
+				return nil
+			}(); err != nil {
 				return err
 			}
 		}

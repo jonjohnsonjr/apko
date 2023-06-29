@@ -141,7 +141,6 @@ func (a *APK) ResolvePackages(ctx context.Context) (toInstall []*repository.Repo
 }
 
 func (a *APK) SplitApk(ctx context.Context, pkg *repository.RepositoryPackage) (*apkimpl.SplitApk, error) {
-	// sync reality with desired apk world
 	return a.impl.SplitApk(ctx, pkg)
 }
 
