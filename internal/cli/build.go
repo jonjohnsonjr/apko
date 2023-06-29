@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	coci "github.com/sigstore/cosign/v2/pkg/oci"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -267,17 +268,22 @@ func buildImageComponents(ctx context.Context, wd string, archs []types.Architec
 			}
 			bc.Options.TarballPath = filepath.Join(imageDir, bc.Options.TarballFileName())
 
-			if err := bc.Tiger(ctx); err != nil {
-				return err
-			}
-
 			_, span := otel.Tracer("apko").Start(ctx, "existing path")
 			defer span.End()
 
-			layerTarGZ, layer, err := bc.BuildLayer(ctx)
+			var (
+				layerTarGZ string
+				layer      v1.Layer
+			)
+			if os.Getenv("APKSEW") == "" {
+				layerTarGZ, layer, err = bc.BuildLayer(ctx)
+			} else {
+				layerTarGZ, layer, err = bc.BuildLayer2(ctx)
+			}
 			if err != nil {
 				return fmt.Errorf("failed to build layer image for %q: %w", arch, err)
 			}
+
 			imageTars[arch] = layerTarGZ
 
 			// Compute the "build date epoch" from the packages that were

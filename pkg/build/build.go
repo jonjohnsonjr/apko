@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"io/fs"
 	"os"
 	"runtime"
 	"strconv"
@@ -118,17 +117,6 @@ func (bc *Context) GetBuildDateEpoch() (time.Time, error) {
 	return bde, nil
 }
 
-func (bc *Context) _BuildImage(ctx context.Context) (fs.FS, error) {
-	ctx, span := otel.Tracer("apko").Start(ctx, "BuildImage")
-	defer span.End()
-	// TODO(puerco): Point to final interface (see comment on buildImage fn)
-	return bc.fs, nil
-}
-
-func (bc *Context) Tiger(ctx context.Context) error {
-	return buildImage2(ctx, bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration, bc.s6)
-}
-
 func (bc *Context) BuildPackageList(ctx context.Context) (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
 	// TODO(puerco): Point to final interface (see comment on buildImage fn)
 	return buildPackageList(ctx, bc.fs, bc.impl, &bc.Options, &bc.ImageConfiguration)
@@ -156,6 +144,40 @@ func (bc *Context) BuildLayer(ctx context.Context) (string, v1.Layer, error) {
 	}
 
 	return bc.ImageLayoutToLayer(ctx)
+}
+
+func (bc *Context) BuildLayer2(ctx context.Context) (string, v1.Layer, error) {
+	ctx, span := otel.Tracer("apko").Start(ctx, "BuildLayer2")
+	defer span.End()
+
+	layerTarGZ, diffid, digest, size, err := BuildTarball2(ctx, bc.fs, &bc.Options, &bc.ImageConfiguration)
+	// build layer tarball
+	if err != nil {
+		return "", nil, err
+	}
+
+	mt := v1types.OCILayer
+	if bc.Options.UseDockerMediaTypes {
+		mt = v1types.DockerLayer
+	}
+
+	l := &layer{
+		filename: layerTarGZ,
+		desc: &v1.Descriptor{
+			Digest: v1.Hash{
+				Algorithm: "sha256",
+				Hex:       hex.EncodeToString(digest.Sum(make([]byte, 0, digest.Size()))),
+			},
+			Size:      size,
+			MediaType: mt,
+		},
+		diffid: &v1.Hash{
+			Algorithm: "sha256",
+			Hex:       hex.EncodeToString(diffid.Sum(make([]byte, 0, diffid.Size()))),
+		},
+	}
+
+	return layerTarGZ, l, nil
 }
 
 // ImageLayoutToLayer given an already built-out

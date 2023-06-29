@@ -15,6 +15,7 @@
 package build
 
 import (
+	"archive/tar"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -159,4 +160,23 @@ func (di *buildImplementation) MutatePaths(
 	}
 
 	return nil
+}
+
+// TODO: The rest of the owl.
+func AppendPaths(tw *tar.Writer, ic *types.ImageConfiguration) error {
+	for _, mut := range ic.Paths {
+		if mut.Type == "permissions" {
+			return fmt.Errorf("TODO(jonjohnsonjr): finish implementing AppendPaths")
+		}
+
+		if mut.Type == "directory" {
+		} else if mut.Type == "empty-file" {
+		} else if mut.Type == "hardlink" {
+		} else if mut.Type == "symlink" {
+		} else {
+			return fmt.Errorf("unsupported path mutation type %q", mut.Type)
+		}
+	}
+
+	return fmt.Errorf("TODO(jonjohnsonjr): finish implementing AppendPaths")
 }

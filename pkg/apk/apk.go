@@ -20,12 +20,10 @@ import (
 	"archive/tar"
 	"context"
 	"fmt"
-	"io"
 	"io/fs"
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	apkimpl "github.com/chainguard-dev/go-apk/pkg/apk"
 	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
@@ -78,8 +76,8 @@ func NewWithOptions(fsys apkfs.FullFS, o options.Options) (*APK, error) {
 
 type Option func(*APK) error
 
-func (a *APK) Combine(ctx context.Context, w io.Writer, sde *time.Time) error {
-	return a.impl.Combine(ctx, w, sde)
+func (a *APK) InitKeyring(ctx context.Context, keyFiles, extraKeyFiles []string) (err error) {
+	return a.impl.InitKeyring(ctx, keyFiles, extraKeyFiles)
 }
 
 // Initialize sets the image in Context.WorkDir according to the image configuration,
@@ -89,7 +87,7 @@ func (a *APK) Initialize(ctx context.Context, ic *types.ImageConfiguration) erro
 	defer span.End()
 
 	// initialize apk
-	alpineVersions := parseOptionsFromRepositories(ic.Contents.Repositories)
+	alpineVersions := ParseOptionsFromRepositories(ic.Contents.Repositories)
 	if err := a.impl.InitDB(ctx, alpineVersions...); err != nil {
 		return fmt.Errorf("failed to initialize apk database: %w", err)
 	}
@@ -140,6 +138,11 @@ func (a *APK) Tiger() error {
 func (a *APK) ResolvePackages(ctx context.Context) (toInstall []*repository.RepositoryPackage, conflicts []string, err error) {
 	// sync reality with desired apk world
 	return a.impl.ResolveWorld(ctx)
+}
+
+func (a *APK) SplitApk(ctx context.Context, pkg *repository.RepositoryPackage) (*apkimpl.SplitApk, error) {
+	// sync reality with desired apk world
+	return a.impl.SplitApk(ctx, pkg)
 }
 
 func (a *APK) GetInstalled() ([]*apkimpl.InstalledPackage, error) {
@@ -244,7 +247,7 @@ func (a *APK) ListInitFiles() []tar.Header {
 
 var repoRE = regexp.MustCompile(`^http[s]?://.+\/alpine\/([^\/]+)\/[^\/]+$`)
 
-func parseOptionsFromRepositories(repos []string) []string {
+func ParseOptionsFromRepositories(repos []string) []string {
 	var versions = make([]string, 0)
 	for _, r := range repos {
 		parts := repoRE.FindStringSubmatch(r)

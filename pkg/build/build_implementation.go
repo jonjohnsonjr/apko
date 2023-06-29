@@ -15,7 +15,6 @@
 package build
 
 import (
-	"archive/tar"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -308,87 +307,6 @@ func buildImage(
 	// add necessary character devices
 	if err := di.InstallCharDevices(fsys); err != nil {
 		return err
-	}
-
-	o.Logger().Infof("finished building filesystem in %s", o.WorkDir)
-
-	return nil
-}
-
-func buildImage2(
-	ctx context.Context,
-	fsys apkfs.FullFS, di *buildImplementation, o *options.Options, ic *types.ImageConfiguration,
-	s6context *s6.Context,
-) error {
-	o.Logger().Infof("doing pre-flight checks")
-	if err := di.ValidateImageConfiguration(ic); err != nil {
-		return fmt.Errorf("failed to validate configuration: %w", err)
-	}
-
-	o.Logger().Infof("building image fileystem in %s", o.WorkDir)
-
-	apk, err := chainguardAPK.NewWithOptions(fsys, *o)
-	if err != nil {
-		return err
-	}
-	if err := apk.Initialize(ctx, ic); err != nil {
-		return fmt.Errorf("initializing apk: %w", err)
-	}
-
-	w, err := os.CreateTemp("", "")
-	if err != nil {
-		return err
-	}
-
-	o.Logger().Printf("Combine file: %q", w.Name())
-
-	if err := apk.Combine(ctx, w, &o.SourceDateEpoch); err != nil {
-		return fmt.Errorf("installing apk packages: %w", err)
-	}
-
-	// TODO(jonjohnsonjr): Some of the rest of this can be shared across invocations.
-
-	if err := di.MutateAccounts(fsys, o, ic); err != nil {
-		return fmt.Errorf("failed to mutate accounts: %w", err)
-	}
-
-	if err := di.MutatePaths(fsys, o, ic); err != nil {
-		return fmt.Errorf("failed to mutate paths: %w", err)
-	}
-
-	zw := gzip.NewWriter(w)
-	defer zw.Close()
-
-	tw := tar.NewWriter(zw)
-	defer tw.Close()
-
-	if err := AppendOSRelease(tw, ic); err != nil {
-		return fmt.Errorf("failed to generate /etc/os-release: %w", err)
-	}
-
-	if err := AppendSupervisionTree(tw, ic); err != nil {
-		return fmt.Errorf("failed to write supervision tree: %w", err)
-	}
-
-	// TODO(jonjohnsonjr): Fix this later.
-	//
-	// add busybox symlinks
-	// if err := di.InstallBusyboxLinks(fsys, o); err != nil {
-	// 	return err
-	// }
-
-	// TODO(jonjohnsonjr): This appears to be a no-op.
-	//
-	// add ldconfig links
-	// if err := di.InstallLdconfigLinks(fsys); err != nil {
-	// 	return err
-	// }
-
-	// TODO(jonjohnsonjr): We can reuse this across all invocations.
-	//
-	// add necessary character devices
-	if err := AppendCharDevices(tw); err != nil {
-		return fmt.Errorf("writing char devices: %w", err)
 	}
 
 	o.Logger().Infof("finished building filesystem in %s", o.WorkDir)

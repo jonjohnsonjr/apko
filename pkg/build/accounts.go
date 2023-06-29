@@ -16,8 +16,11 @@ package build
 
 import (
 	"archive/tar"
+	"bytes"
 	"fmt"
+	"io"
 	"os"
+	"path"
 	"path/filepath"
 
 	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
@@ -158,11 +161,8 @@ func (di *buildImplementation) MutateAccounts(
 }
 
 // Assumes these files do not already exist.
-func AppendAccounts(tw *tar.Writer, fsys apkfs.FullFS, ic *types.ImageConfiguration) error {
+func AppendAccounts(tw *tar.Writer, ic *types.ImageConfiguration) error {
 	if len(ic.Accounts.Groups) != 0 {
-		// Mutate the /etc/groups file
-		path := filepath.Join("etc", "group")
-
 		gf := passwd.GroupFile{}
 
 		for _, g := range ic.Accounts.Groups {
@@ -176,14 +176,23 @@ func AppendAccounts(tw *tar.Writer, fsys apkfs.FullFS, ic *types.ImageConfigurat
 			gf.Entries = append(gf.Entries, ge)
 		}
 
-		// TODO(jonjohnsonjr): copy into tw
-		if err := gf.WriteFile(fsys, path); err != nil {
+		// append etc/group
+		buf := &bytes.Buffer{}
+		if err := gf.Write(buf); err != nil {
+			return err
+		}
+
+		hdr := tar.Header{
+			Name: path.Join("etc", "group"),
+			Size: int64(buf.Len()),
+		}
+		if err := tw.WriteHeader(&hdr); err != nil {
+			return err
+		}
+		if _, err := io.Copy(tw, buf); err != nil {
 			return err
 		}
 	}
-
-	// Mutate the /etc/passwd file
-	path := filepath.Join("etc", "passwd")
 
 	uf := passwd.UserFile{}
 
@@ -196,46 +205,39 @@ func AppendAccounts(tw *tar.Writer, fsys apkfs.FullFS, ic *types.ImageConfigurat
 		if ue.HomeDir == "/dev/null" {
 			continue
 		}
-		// Create a version of the user's home directory rooted at our
-		// working directory.
-		targetHomedir := ue.HomeDir
 
-		// Make sure a directory exists with the path we expect.
-		if fi, err := fsys.Stat(targetHomedir); err == nil {
-			if !fi.IsDir() {
-				return fmt.Errorf("%s home directory %s exists, but is not a directory", ue.UserName, ue.HomeDir)
-			}
-			// TODO(jonjohnsonjr): Do we really need to care about this?
-			//                     Maybe pass in a list of existing files?
-
-			// If the directory already exists, we do not mess with the
-			// permissions because some built-in users use things like:
-			//    /bin, /sbin, /
-			// and we don't want to screw with those permissions.
-			continue
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("checking homedir exists: %w", err)
-		}
+		// TODO(jonjohnsonjr): Figure out if we care about the stuff that was here.
 		// Create the directory. Only the directory should be 0o700; parents, if they are missing, should be 0o755.
-		parent := filepath.Dir(targetHomedir)
-		if err := fsys.MkdirAll(parent, 0o755); err != nil {
-			return fmt.Errorf("creating parent %s: %w", parent, err)
+
+		hdr := tar.Header{
+			Name:     ue.HomeDir,
+			Typeflag: tar.TypeDir,
+			Mode:     0700,
+			Uid:      int(ue.UID),
+			Gid:      int(ue.GID),
 		}
-		if err := fsys.Mkdir(targetHomedir, 0o700); err != nil {
-			return fmt.Errorf("creating homedir: %w", err)
-		}
-		if err := fsys.Chown(targetHomedir, int(ue.UID), int(ue.GID)); err != nil {
-			return fmt.Errorf("chowning homedir: %w", err)
+		if err := tw.WriteHeader(&hdr); err != nil {
+			return err
 		}
 	}
 
-	// TODO(jonjohnsonjr): copy into tw
-	if err := uf.WriteFile(path); err != nil {
+	// append etc/passwd
+	buf := &bytes.Buffer{}
+	if err := uf.Write(buf); err != nil {
+		return err
+	}
+	hdr := tar.Header{
+		Name: path.Join("etc", "passwd"),
+		Size: int64(buf.Len()),
+	}
+	if err := tw.WriteHeader(&hdr); err != nil {
+		return err
+	}
+	if _, err := io.Copy(tw, buf); err != nil {
 		return err
 	}
 
 	// TODO(jonjohnsonjr): AHHHHHHHHHHHHHHHHHHHHHHHHH.
-
 	// Resolve run-as user if requested.
 	if ic.Accounts.RunAs != "" {
 		for _, ue := range uf.Entries {
