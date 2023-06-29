@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 
@@ -134,6 +135,36 @@ func (di *buildImplementation) GenerateOSRelease(
 	}
 
 	return nil
+}
+
+func CreateOSRelease(ic *types.ImageConfiguration) string {
+	lines := []string{}
+
+	if ic.OSRelease.ID != "" {
+		lines = append(lines, fmt.Sprintf("ID=%s\n", ic.OSRelease.ID))
+	}
+
+	if ic.OSRelease.Name != "" {
+		lines = append(lines, fmt.Sprintf("NAME=%q\n", ic.OSRelease.Name))
+	}
+
+	if ic.OSRelease.PrettyName != "" {
+		lines = append(lines, fmt.Sprintf("PRETTY_NAME=%q\n", ic.OSRelease.PrettyName))
+	}
+
+	if ic.OSRelease.VersionID != "" {
+		lines = append(lines, fmt.Sprintf("VERSION_ID=%s\n", ic.OSRelease.VersionID))
+	}
+
+	if ic.OSRelease.HomeURL != "" {
+		lines = append(lines, fmt.Sprintf("HOME_URL=%q\n", ic.OSRelease.HomeURL))
+	}
+
+	if ic.OSRelease.BugReportURL != "" {
+		lines = append(lines, fmt.Sprintf("BUG_REPORT_URL=%q\n", ic.OSRelease.BugReportURL))
+	}
+
+	return strings.Join(lines, "")
 }
 
 // We assume it does not exist already.

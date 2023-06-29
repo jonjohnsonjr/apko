@@ -166,7 +166,7 @@ func (di *buildImplementation) MutatePaths(
 func AppendPaths(tw *tar.Writer, ic *types.ImageConfiguration) error {
 	for _, mut := range ic.Paths {
 		if mut.Type == "permissions" {
-			return fmt.Errorf("TODO(jonjohnsonjr): finish implementing AppendPaths")
+			return fmt.Errorf("TODO(jonjohnsonjr): finish implementing permissions AppendPaths")
 		}
 
 		if mut.Type == "directory" {
@@ -176,7 +176,9 @@ func AppendPaths(tw *tar.Writer, ic *types.ImageConfiguration) error {
 		} else {
 			return fmt.Errorf("unsupported path mutation type %q", mut.Type)
 		}
+
+		return fmt.Errorf("TODO(jonjohnsonjr): finish implementing %s", mut.Type)
 	}
 
-	return fmt.Errorf("TODO(jonjohnsonjr): finish implementing AppendPaths")
+	return nil
 }

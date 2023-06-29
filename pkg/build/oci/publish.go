@@ -27,6 +27,7 @@ import (
 	"github.com/sigstore/cosign/v2/pkg/oci"
 	ociremote "github.com/sigstore/cosign/v2/pkg/oci/remote"
 	"github.com/sigstore/cosign/v2/pkg/oci/walk"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
 
 	"chainguard.dev/apko/pkg/log"
@@ -128,6 +129,9 @@ func LoadImage(ctx context.Context, image oci.SignedImage, logger log.Logger, ta
 // platform, defaulting to the one on which the docker daemon is running.
 // PublishIndex will determine that platform and use it to publish the updated index.
 func PublishIndex(ctx context.Context, idx oci.SignedImageIndex, logger log.Logger, shouldPushTags bool, tags []string, remoteOpts ...remote.Option) (name.Digest, error) {
+	ctx, span := otel.Tracer("apko").Start(ctx, "PublishIndex")
+	defer span.End()
+
 	// TODO(jason): Also set annotations on the index. ggcr's
 	// pkg/v1/mutate.Annotations will drop the interface methods from
 	// oci.SignedImageIndex, so we may need to reimplement
@@ -226,6 +230,9 @@ func LoadIndex(ctx context.Context, idx oci.SignedImageIndex, logger log.Logger,
 // The only difference between this and PublishIndex is that PublishIndex pushes out all blobs and referenced manifests
 // from within the index. This adds pushing the referenced SignedImage artifacts along with appropriate tags.
 func PublishImagesFromIndex(ctx context.Context, idx oci.SignedImageIndex, logger log.Logger, repo name.Repository, remoteOpts ...remote.Option) ([]name.Digest, error) {
+	ctx, span := otel.Tracer("apko").Start(ctx, "PublishImagesFromIndex")
+	defer span.End()
+
 	manifest, err := idx.IndexManifest()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get index manifest: %w", err)

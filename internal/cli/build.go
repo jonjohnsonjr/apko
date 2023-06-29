@@ -176,6 +176,9 @@ func BuildCmd(ctx context.Context, imageRef, outputTarGZ string, archs []types.A
 // buildImage build all of the components of an image in a single working directory.
 // Each layer is a separate file, as are config, manifests, index and sbom.
 func buildImageComponents(ctx context.Context, wd string, archs []types.Architecture, opts ...build.Option) (idx coci.SignedImageIndex, sboms []types.SBOM, err error) {
+	ctx, span := otel.Tracer("apko").Start(ctx, "buildImageComponents")
+	defer span.End()
+
 	bc, err := build.New(wd, opts...)
 	if err != nil {
 		return nil, nil, err
@@ -301,7 +304,7 @@ func buildImageComponents(ctx context.Context, wd string, archs []types.Architec
 			}
 
 			img, err := oci.BuildImageFromLayer(
-				layer, bc.ImageConfiguration, bc.Options.SourceDateEpoch, bc.Options.Arch, bc.Logger())
+				ctx, layer, bc.ImageConfiguration, bc.Options.SourceDateEpoch, bc.Options.Arch, bc.Logger())
 			if err != nil {
 				return fmt.Errorf("failed to build OCI image for %q: %w", arch, err)
 			}

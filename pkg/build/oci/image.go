@@ -15,6 +15,7 @@
 package oci
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -30,13 +31,17 @@ import (
 	"github.com/google/shlex"
 	"github.com/sigstore/cosign/v2/pkg/oci"
 	"github.com/sigstore/cosign/v2/pkg/oci/signed"
+	"go.opentelemetry.io/otel"
 
 	"chainguard.dev/apko/pkg/build/types"
 	"chainguard.dev/apko/pkg/log"
 	"chainguard.dev/apko/pkg/options"
 )
 
-func BuildImageFromLayer(layer v1.Layer, ic types.ImageConfiguration, created time.Time, arch types.Architecture, logger log.Logger) (oci.SignedImage, error) {
+func BuildImageFromLayer(ctx context.Context, layer v1.Layer, ic types.ImageConfiguration, created time.Time, arch types.Architecture, logger log.Logger) (oci.SignedImage, error) {
+	ctx, span := otel.Tracer("apko").Start(ctx, "oci.BuildImageFromLayer")
+	defer span.End()
+
 	mediaType, err := layer.MediaType()
 	if err != nil {
 		return nil, fmt.Errorf("accessing layer MediaType: %w", err)
@@ -169,7 +174,7 @@ func BuildImageFromLayer(layer v1.Layer, ic types.ImageConfiguration, created ti
 }
 
 func BuildImageTarballFromLayer(imageRef string, layer v1.Layer, outputTarGZ string, ic types.ImageConfiguration, logger log.Logger, opts options.Options) error {
-	v1Image, err := BuildImageFromLayer(layer, ic, opts.SourceDateEpoch, opts.Arch, logger)
+	v1Image, err := BuildImageFromLayer(context.TODO(), layer, ic, opts.SourceDateEpoch, opts.Arch, logger)
 	if err != nil {
 		return err
 	}

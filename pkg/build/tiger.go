@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"os"
+	"path/filepath"
 
 	"chainguard.dev/apko/pkg/apk"
 	"chainguard.dev/apko/pkg/build/types"
@@ -40,10 +41,22 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 
 	o.Logger().Infof("building image fileystem in %s", o.WorkDir)
 
-	w, err := os.CreateTemp(o.WorkDir, "")
-	if err != nil {
-		return "", nil, nil, 0, fmt.Errorf("CreateTemp: %w", err)
+	var w *os.File
+	var err error
+
+	if o.TarballPath != "" {
+		w, err = os.Create(o.TarballPath)
+	} else {
+		w, err = os.Create(filepath.Join(o.TempDir(), o.TarballFileName()))
 	}
+	if err != nil {
+		return "", nil, nil, 0, fmt.Errorf("opening the build context tarball path failed: %w", err)
+	}
+
+	o.TarballPath = w.Name()
+	defer w.Close()
+
+	o.Logger().Infof("building tarball in %s", w.Name())
 
 	cw := &countWriter{}
 	digest := sha256.New()
@@ -61,8 +74,17 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 		if err != nil {
 			return err
 		}
+
+		// TODO: We should not need to do this.
 		if err := a.Initialize(ctx, ic); err != nil {
 			return fmt.Errorf("failed to initialize apk: %w", err)
+		}
+
+		// TODO: Or this.
+		osr := filepath.Join("etc", "os-release")
+		b := []byte(CreateOSRelease(ic))
+		if err := fsys.WriteFile(osr, b, 0644); err != nil {
+			return fmt.Errorf("creating etc/os-release: %w", err)
 		}
 
 		arch := o.Arch.ToAPK()
@@ -110,7 +132,7 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 			return fmt.Errorf("error getting package dependencies: %w", err)
 		}
 		if len(conflicts) != 0 {
-			return fmt.Errorf("conflicts: %v", conflicts)
+			o.Logger().Printf("TODO(conflicts???): %v", conflicts)
 		}
 
 		// TODO(jonjohnsonjr): Track what we need.
@@ -245,7 +267,7 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(w, compressed); err != nil {
+			if _, err := io.Copy(zmw, compressed); err != nil {
 				return err
 			}
 		}
