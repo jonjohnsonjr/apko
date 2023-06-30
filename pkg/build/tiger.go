@@ -17,6 +17,8 @@ import (
 	"chainguard.dev/apko/pkg/options"
 	goapk "github.com/chainguard-dev/go-apk/pkg/apk"
 	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
+	"go.opentelemetry.io/otel"
+	"golang.org/x/sync/errgroup"
 )
 
 type countWriter struct {
@@ -29,6 +31,9 @@ func (w *countWriter) Write(p []byte) (int, error) {
 }
 
 func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration) (string, hash.Hash, hash.Hash, int64, error) {
+	ctx, span := otel.Tracer("apko").Start(ctx, "BuildTarball2")
+	defer span.End()
+
 	o.Logger().Infof("doing pre-flight checks")
 	if err := ic.Validate(); err != nil {
 		return "", nil, nil, 0, fmt.Errorf("failed to validate configuration: %w", err)
@@ -164,26 +169,43 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 		// 	return err
 		// }
 
-		// TODO: fan out and sync.Once this stuff
-		splits := make([]*goapk.SplitApk, 0, len(allpkgs))
-		for _, pkg := range allpkgs {
-			o.Logger().Printf("splitting %s", pkg.Filename())
+		// TODO: sync.Once this stuff
+		splits := make([]*goapk.SplitApk, len(allpkgs))
 
-			// TODO(jonjohnsonjr): Do we need to check if pkgs are already installed?
-			split, err := a.SplitApk(ctx, pkg)
-			if err != nil {
-				return err
-			}
+		g, ctx := errgroup.WithContext(ctx)
 
-			splits = append(splits, split)
+		// TODO: Proper number.
+		g.SetLimit(8)
+
+		for i, pkg := range allpkgs {
+			i, pkg := i, pkg
+			g.Go(func() error {
+				o.Logger().Printf("splitting %s", pkg.Filename())
+
+				// TODO(jonjohnsonjr): Do we need to check if pkgs are already installed?
+				split, err := a.SplitApk(ctx, pkg)
+				if err != nil {
+					return err
+				}
+
+				splits[i] = split
+
+				return nil
+			})
+		}
+
+		if err := g.Wait(); err != nil {
+			return err
 		}
 
 		installedFile, err := fsys.OpenFile("lib/apk/db/installed", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
 			return fmt.Errorf("could not open installed file for write: %w", err)
 		}
-
 		defer installedFile.Close()
+
+		_, span2 := otel.Tracer("apko").Start(ctx, "metadataFiles")
+
 		scriptData := &bytes.Buffer{}
 		triggerData := &bytes.Buffer{}
 		installedData := &bytes.Buffer{}
@@ -269,6 +291,9 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 			return fmt.Errorf("closing gzip: %w", err)
 		}
 
+		span2.End()
+
+		_, span3 := otel.Tracer("apko").Start(ctx, "diffid")
 		// TODO: Fanout with WriteAt?
 		for _, split := range splits {
 			uncompressed, err := split.Uncompressed()
@@ -278,7 +303,11 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 			if _, err := io.Copy(diffid, uncompressed); err != nil {
 				return err
 			}
+		}
+		span3.End()
 
+		_, span4 := otel.Tracer("apko").Start(ctx, "layer")
+		for _, split := range splits {
 			compressed, err := split.Compressed()
 			if err != nil {
 				return err
@@ -287,6 +316,7 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 				return err
 			}
 		}
+		span4.End()
 
 		return nil
 	}(); err != nil {

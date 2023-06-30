@@ -19,11 +19,11 @@ import (
 	"log"
 
 	"chainguard.dev/apko/internal/cli"
-	"github.com/jonjohnsonjr/mane/trace"
+	"github.com/jonjohnsonjr/mane/pprof"
 )
 
 func main() {
-	if err := trace.Main(context.Background(), cli.New().ExecuteContext); err != nil {
+	if err := pprof.Main(context.Background(), cli.New().ExecuteContext); err != nil {
 		log.Fatalf("error during command execution: %v", err)
 	}
 }
