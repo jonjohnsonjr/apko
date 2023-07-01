@@ -78,17 +78,24 @@ func (bc *Context) BuildTarball(ctx context.Context) (string, hash.Hash, hash.Ha
 
 // WriteIndex calls the underlying implementation's WriteIndex
 // which takes the an index struct and saves it to the working directory.
-func (bc *Context) WriteIndex(idx coci.SignedImageIndex) (string, int64, error) {
+func (bc *Context) WriteIndex(ctx context.Context, idx coci.SignedImageIndex) (string, int64, error) {
+	ctx, span := otel.Tracer("apko").Start(ctx, "WriteIndex")
+	defer span.End()
 	return bc.impl.WriteIndex(&bc.Options, idx)
 }
 
-func (bc *Context) GenerateImageSBOM(arch types.Architecture, img coci.SignedImage) ([]types.SBOM, error) {
+func (bc *Context) GenerateImageSBOM(ctx context.Context, arch types.Architecture, img coci.SignedImage) ([]types.SBOM, error) {
+	ctx, span := otel.Tracer("apko").Start(ctx, "GenerateImageSBOM")
+	defer span.End()
+
 	opts := bc.Options
 	opts.Arch = arch
 	return bc.impl.GenerateImageSBOM(&opts, &bc.ImageConfiguration, img)
 }
 
-func (bc *Context) GenerateIndexSBOM(indexDigest name.Digest, imgs map[types.Architecture]coci.SignedImage) ([]types.SBOM, error) {
+func (bc *Context) GenerateIndexSBOM(ctx context.Context, indexDigest name.Digest, imgs map[types.Architecture]coci.SignedImage) ([]types.SBOM, error) {
+	ctx, span := otel.Tracer("apko").Start(ctx, "GenerateIndexSBOM")
+	defer span.End()
 	return bc.impl.GenerateIndexSBOM(&bc.Options, &bc.ImageConfiguration, indexDigest, imgs)
 }
 
@@ -147,9 +154,6 @@ func (bc *Context) BuildLayer(ctx context.Context) (string, v1.Layer, error) {
 }
 
 func (bc *Context) BuildLayer2(ctx context.Context) (string, v1.Layer, error) {
-	ctx, span := otel.Tracer("apko").Start(ctx, "BuildLayer2")
-	defer span.End()
-
 	layerTarGZ, diffid, digest, size, err := BuildTarball2(ctx, bc.fs, &bc.Options, &bc.ImageConfiguration)
 	// build layer tarball
 	if err != nil {

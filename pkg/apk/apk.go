@@ -140,8 +140,8 @@ func (a *APK) ResolvePackages(ctx context.Context) (toInstall []*repository.Repo
 	return a.impl.ResolveWorld(ctx)
 }
 
-func (a *APK) SplitApk(ctx context.Context, pkg *repository.RepositoryPackage) (*apkimpl.SplitApk, error) {
-	return a.impl.SplitApk(ctx, pkg)
+func (a *APK) SplitApk(ctx context.Context, pkg *repository.RepositoryPackage, omit map[string]struct{}) (*apkimpl.SplitApk, error) {
+	return a.impl.SplitApk(ctx, pkg, omit)
 }
 
 func (a *APK) GetInstalled() ([]*apkimpl.InstalledPackage, error) {

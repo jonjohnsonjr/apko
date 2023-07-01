@@ -271,9 +271,6 @@ func buildImageComponents(ctx context.Context, wd string, archs []types.Architec
 			}
 			bc.Options.TarballPath = filepath.Join(imageDir, bc.Options.TarballFileName())
 
-			_, span := otel.Tracer("apko").Start(ctx, "existing path")
-			defer span.End()
-
 			var (
 				layerTarGZ string
 				layer      v1.Layer
@@ -324,7 +321,7 @@ func buildImageComponents(ctx context.Context, wd string, archs []types.Architec
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate OCI index: %w", err)
 	}
-	if _, _, err := bc.WriteIndex(idx); err != nil {
+	if _, _, err := bc.WriteIndex(ctx, idx); err != nil {
 		return nil, nil, fmt.Errorf("failed to write OCI index: %w", err)
 	}
 
@@ -349,7 +346,7 @@ func buildImageComponents(ctx context.Context, wd string, archs []types.Architec
 			bc.Options.SBOMPath = imageDir
 
 			g.Go(func() error {
-				outputs, err := bc.GenerateImageSBOM(arch, img)
+				outputs, err := bc.GenerateImageSBOM(ctx, arch, img)
 				if err != nil {
 					return fmt.Errorf("generating sbom for %s: %w", arch, err)
 				}
@@ -366,7 +363,7 @@ func buildImageComponents(ctx context.Context, wd string, archs []types.Architec
 		bc.Options.WantSBOM = true
 		bc.Options.SBOMFormats = formats
 		bc.Options.SBOMPath = imageDir
-		files, err := bc.GenerateIndexSBOM(finalDigest, imgs)
+		files, err := bc.GenerateIndexSBOM(ctx, finalDigest, imgs)
 		if err != nil {
 			return nil, nil, fmt.Errorf("generating index SBOM: %w", err)
 		}

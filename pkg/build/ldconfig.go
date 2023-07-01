@@ -17,6 +17,7 @@ import (
 	"debug/elf"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,6 +107,7 @@ func (di *buildImplementation) InstallLdconfigLinks(fsys apkfs.FullFS) error {
 	if err != nil {
 		return err
 	}
+	log.Printf("linksMap: %v", linksMap)
 	for link, target := range linksMap {
 		dir := filepath.Dir(link)
 		if err := fsys.MkdirAll(dir, 0755); err != nil {

@@ -22,6 +22,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 
 	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 	"golang.org/x/sync/errgroup"
@@ -210,7 +211,7 @@ func AppendAccounts(tw *tar.Writer, ic *types.ImageConfiguration) error {
 		// Create the directory. Only the directory should be 0o700; parents, if they are missing, should be 0o755.
 
 		hdr := tar.Header{
-			Name:     ue.HomeDir,
+			Name:     strings.TrimPrefix(ue.HomeDir, "/"),
 			Typeflag: tar.TypeDir,
 			Mode:     0700,
 			Uid:      int(ue.UID),

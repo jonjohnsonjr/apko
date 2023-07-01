@@ -24,6 +24,7 @@
 package build
 
 import (
+	"archive/tar"
 	"errors"
 	"fmt"
 	"os"
@@ -55,6 +56,7 @@ var busyboxLinks map[string][]string
 
 func (di *buildImplementation) InstallBusyboxLinks(fsys apkfs.FullFS, o *options.Options) error {
 	// TODO(jonjohnsonjr): Skip this and rely on GetInstalled.
+
 	// does busybox exist? if not, do not bother with symlinks
 	if _, err := fsys.Stat(busybox); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -141,5 +143,26 @@ func (di *buildImplementation) InstallBusyboxLinks(fsys apkfs.FullFS, o *options
 			return fmt.Errorf("creating busybox link %s: %w", link, err)
 		}
 	}
+	return nil
+}
+
+func AppendBusyboxLinks(tw *tar.Writer, links []string) error {
+	for _, link := range links {
+		if link == busybox || link == "" {
+			continue
+		}
+
+		hdr := tar.Header{
+			Name:     strings.TrimPrefix(link, "/"),
+			Typeflag: tar.TypeSymlink,
+			Linkname: "/bin/busybox",
+			Mode:     0777,
+		}
+
+		if err := tw.WriteHeader(&hdr); err != nil {
+			return fmt.Errorf("appending busybox symlink %q: %w", link, err)
+		}
+	}
+
 	return nil
 }

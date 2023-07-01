@@ -30,6 +30,12 @@ func (w *countWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Files we need to track:
+// - etc/os-release
+// - bin/busybox
+// - etc/busybox-paths.d/*
+// - homedirs (from ic)
+
 func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, ic *types.ImageConfiguration) (string, hash.Hash, hash.Hash, int64, error) {
 	ctx, span := otel.Tracer("apko").Start(ctx, "BuildTarball2")
 	defer span.End()
@@ -90,8 +96,15 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 		// TODO: We probably want to append these last to overwrite existing stuff.
 		// Alternatively, we can keep a list of files to omit and pass that to SplitAPK.
 		arch := o.Arch.ToAPK()
-		if err := goapk.AppendInitFiles(tw, arch); err != nil {
+
+		hdrs, err := goapk.AppendInitFiles(tw, arch)
+		if err != nil {
 			return fmt.Errorf("failed to initialize apk database: %w", err)
+		}
+
+		omit := make(map[string]struct{}, len(hdrs))
+		for _, hdr := range hdrs {
+			omit[hdr.Name] = struct{}{}
 		}
 
 		alpineVersions := apk.ParseOptionsFromRepositories(ic.Contents.Repositories)
@@ -147,20 +160,9 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 			return fmt.Errorf("failed to mutate paths: %w", err)
 		}
 
-		if err := AppendOSRelease(tw, ic); err != nil {
-			return fmt.Errorf("failed to generate /etc/os-release: %w", err)
-		}
-
 		if err := AppendSupervisionTree(tw, ic); err != nil {
 			return fmt.Errorf("failed to write supervision tree: %w", err)
 		}
-
-		// TODO(jonjohnsonjr): Fix this later.
-		//
-		// add busybox symlinks
-		// if err := di.InstallBusyboxLinks(fsys, o); err != nil {
-		// 	return err
-		// }
 
 		// TODO(jonjohnsonjr): This appears to be a no-op.
 		//
@@ -177,18 +179,31 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 		// TODO: Proper number.
 		g.SetLimit(8)
 
+		sawosrelease := false
+
 		for i, pkg := range allpkgs {
 			i, pkg := i, pkg
 			g.Go(func() error {
 				o.Logger().Printf("splitting %s", pkg.Filename())
 
 				// TODO(jonjohnsonjr): Do we need to check if pkgs are already installed?
-				split, err := a.SplitApk(ctx, pkg)
+				split, err := a.SplitApk(ctx, pkg, omit)
 				if err != nil {
 					return err
 				}
 
 				splits[i] = split
+
+				// TODO: Not this. Maybe list of relevant files passed into SplitAPK or hardcoded.
+				if !sawosrelease {
+					for _, f := range split.Files {
+						if f.Name == "etc/os-release" {
+							o.Logger().Warnf("found os-release in %s", pkg.Name)
+							sawosrelease = true
+							break
+						}
+					}
+				}
 
 				return nil
 			})
@@ -196,6 +211,15 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 
 		if err := g.Wait(); err != nil {
 			return err
+		}
+
+		o.Logger().Warnf("OSRelease.ID == %q", ic.OSRelease.ID)
+		if sawosrelease && (ic.OSRelease.ID == "apko-generated image" || ic.OSRelease.ID == "" || ic.OSRelease.ID == "unknown") {
+			o.Logger().Warnf("did not generate /etc/os-release")
+		} else {
+			if err := AppendOSRelease(tw, ic); err != nil {
+				return fmt.Errorf("failed to generate /etc/os-release: %w", err)
+			}
 		}
 
 		installedFile, err := fsys.OpenFile("lib/apk/db/installed", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
@@ -241,6 +265,12 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 				defer installed.Close()
 				if _, err := io.Copy(instmw, installed); err != nil {
 					return err
+				}
+
+				if links := split.Busybox; len(links) != 0 {
+					if err := AppendBusyboxLinks(tw, links); err != nil {
+						return fmt.Errorf("busybox: %w", err)
+					}
 				}
 
 				return nil
@@ -293,32 +323,41 @@ func BuildTarball2(ctx context.Context, fsys apkfs.FullFS, o *options.Options, i
 
 		span2.End()
 
-		_, span3 := otel.Tracer("apko").Start(ctx, "diffid")
-		// TODO: Fanout with WriteAt?
-		for _, split := range splits {
-			uncompressed, err := split.Uncompressed()
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(diffid, uncompressed); err != nil {
-				return err
-			}
-		}
-		span3.End()
+		var g2 errgroup.Group
+		g2.Go(func() error {
+			_, span := otel.Tracer("apko").Start(ctx, "diffid")
+			defer span.End()
 
-		_, span4 := otel.Tracer("apko").Start(ctx, "layer")
-		for _, split := range splits {
-			compressed, err := split.Compressed()
-			if err != nil {
-				return err
+			// TODO: Fanout with WriteAt?
+			for _, split := range splits {
+				uncompressed, err := split.Uncompressed()
+				if err != nil {
+					return err
+				}
+				if _, err := io.Copy(diffid, uncompressed); err != nil {
+					return err
+				}
 			}
-			if _, err := io.Copy(zmw, compressed); err != nil {
-				return err
-			}
-		}
-		span4.End()
 
-		return nil
+			return nil
+		})
+
+		g2.Go(func() error {
+			_, span := otel.Tracer("apko").Start(ctx, "layer")
+			defer span.End()
+			for _, split := range splits {
+				compressed, err := split.Compressed()
+				if err != nil {
+					return err
+				}
+				if _, err := io.Copy(zmw, compressed); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+
+		return g2.Wait()
 	}(); err != nil {
 		return "", nil, nil, 0, err
 	}
