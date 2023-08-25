@@ -32,7 +32,7 @@ import (
 	"strings"
 
 	"github.com/chainguard-dev/go-apk/pkg/apk"
-	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
+	apkfs "github.com/chainguard-dev/go-apk/pkg/apk"
 )
 
 const (

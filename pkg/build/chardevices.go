@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
+	apkfs "github.com/chainguard-dev/go-apk/pkg/apk"
 	"golang.org/x/sys/unix"
 )
 

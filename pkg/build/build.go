@@ -56,6 +56,8 @@ type Context struct {
 	assertions      []Assertion
 	fs              apkfs.FullFS
 	apk             *apk.APK
+
+	vfs apk.FullFS
 }
 
 func (bc *Context) Summarize() {
@@ -81,8 +83,9 @@ func (bc *Context) GetBuildDateEpoch() (time.Time, error) {
 	return bde, nil
 }
 
-func (bc *Context) BuildImage(ctx context.Context) error {
-	if err := bc.buildImage(ctx); err != nil {
+func (bc *Context) BuildImage(ctx context.Context) (apk.FullFS, error) {
+	fs, err := bc.buildImage(ctx)
+	if err != nil {
 		bc.Logger().Debugf("buildImage failed: %v", err)
 		b, err2 := yaml.Marshal(bc.ic)
 		if err2 != nil {
@@ -90,9 +93,10 @@ func (bc *Context) BuildImage(ctx context.Context) error {
 		} else {
 			bc.Logger().Debugf("image configuration:\n%s", string(b))
 		}
-		return err
+		return nil, err
 	}
-	return nil
+	bc.vfs = fs
+	return fs, nil
 }
 
 func (bc *Context) Logger() log.Logger {
@@ -113,17 +117,18 @@ func (bc *Context) BuildLayer(ctx context.Context) (string, v1.Layer, error) {
 	bc.Summarize()
 
 	// build image filesystem
-	if err := bc.BuildImage(ctx); err != nil {
+	fs, err := bc.BuildImage(ctx)
+	if err != nil {
 		return "", nil, err
 	}
 
-	return bc.ImageLayoutToLayer(ctx)
+	return bc.ImageLayoutToLayer(ctx, fs)
 }
 
 // ImageLayoutToLayer given an already built-out
 // image in an fs from BuildImage(), create
 // an OCI image layer tgz.
-func (bc *Context) ImageLayoutToLayer(ctx context.Context) (string, v1.Layer, error) {
+func (bc *Context) ImageLayoutToLayer(ctx context.Context, fs apk.FullFS) (string, v1.Layer, error) {
 	ctx, span := otel.Tracer("apko").Start(ctx, "ImageLayoutToLayer")
 	defer span.End()
 
@@ -132,7 +137,7 @@ func (bc *Context) ImageLayoutToLayer(ctx context.Context) (string, v1.Layer, er
 		return "", nil, err
 	}
 
-	layerTarGZ, diffid, digest, size, err := bc.BuildTarball(ctx)
+	layerTarGZ, diffid, digest, size, err := bc.BuildTarball(ctx, fs)
 	// build layer tarball
 	if err != nil {
 		return "", nil, err

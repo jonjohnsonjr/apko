@@ -24,7 +24,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
+	"github.com/chainguard-dev/go-apk/pkg/apk"
 	purl "github.com/package-url/packageurl-go"
 	"gitlab.alpinelinux.org/alpine/go/pkg/repository"
 	"sigs.k8s.io/release-utils/version"
@@ -43,10 +43,10 @@ const (
 )
 
 type SPDX struct {
-	fs apkfs.FullFS
+	fs apk.FullFS
 }
 
-func New(fs apkfs.FullFS) SPDX {
+func New(fs apk.FullFS) SPDX {
 	return SPDX{fs}
 }
 
@@ -188,7 +188,7 @@ func replacePackage(doc *Document, originalID, newID string) {
 }
 
 // locateApkSBOM returns the SBOM
-func locateApkSBOM(fsys apkfs.FullFS, p *Package) (string, error) {
+func locateApkSBOM(fsys apk.FullFS, p *Package) (string, error) {
 	re := regexp.MustCompile(`-r\d+$`)
 	for _, s := range []string{
 		fmt.Sprintf("%s/%s-%s.spdx.json", apkSBOMdir, p.Name, p.Version),

@@ -21,12 +21,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
+	apkfs "github.com/chainguard-dev/go-apk/pkg/apk"
 )
 
 // original alpine ldconfig available at https://git.alpinelinux.org/aports/tree/main/musl/ldconfig
 
-func ldconfig(vfs apkfs.OpenReaderAtFS, libdirs ...string) (map[string]string, error) {
+func ldconfig(vfs apkfs.FullFS, libdirs ...string) (map[string]string, error) {
 	links := make(map[string]string)
 	for _, libdir := range libdirs {
 		entries, err := fs.ReadDir(vfs, libdir)
@@ -79,7 +79,7 @@ func ldconfig(vfs apkfs.OpenReaderAtFS, libdirs ...string) (map[string]string, e
 	return links, nil
 }
 
-func getSoname(vfs apkfs.OpenReaderAtFS, path string) (string, error) {
+func getSoname(vfs apkfs.FullFS, path string) (string, error) {
 	file, err := vfs.OpenReaderAt(path)
 	if err != nil {
 		return "", fmt.Errorf("unable to open file %s: %w", path, err)

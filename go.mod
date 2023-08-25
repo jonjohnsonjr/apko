@@ -2,6 +2,8 @@ module chainguard.dev/apko
 
 go 1.20
 
+replace github.com/chainguard-dev/go-apk => ../go-apk
+
 require (
 	github.com/awslabs/amazon-ecr-credential-helper/ecr-login v0.0.0-20220920003936-cd2dbcbbab49
 	github.com/chainguard-dev/go-apk v0.0.0-20230710230135-7fc46e8b3c4d
@@ -13,7 +15,7 @@ require (
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/jinzhu/copier v0.3.5
-	github.com/klauspost/pgzip v1.2.5
+	github.com/klauspost/pgzip v1.2.6
 	github.com/package-url/packageurl-go v0.1.1-0.20220203205134-d70459300c8a
 	github.com/sigstore/cosign/v2 v2.1.1
 	github.com/sirupsen/logrus v1.9.3

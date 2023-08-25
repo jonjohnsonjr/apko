@@ -20,17 +20,17 @@ import (
 	"os"
 	"strings"
 
-	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
+	"github.com/chainguard-dev/go-apk/pkg/apk"
 	purl "github.com/package-url/packageurl-go"
 
 	"chainguard.dev/apko/pkg/sbom/options"
 )
 
 type CycloneDX struct {
-	fs apkfs.FullFS
+	fs apk.FullFS
 }
 
-func New(fs apkfs.FullFS) CycloneDX {
+func New(fs apk.FullFS) CycloneDX {
 	return CycloneDX{fs}
 }
 

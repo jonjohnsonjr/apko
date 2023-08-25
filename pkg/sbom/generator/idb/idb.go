@@ -18,18 +18,17 @@ import (
 	"fmt"
 	"path/filepath"
 
-	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
-
 	"chainguard.dev/apko/pkg/sbom/options"
+	"github.com/chainguard-dev/go-apk/pkg/apk"
 )
 
 // IDB treats the APK installed DB as an SBOM, which can be used with
 // `apk audit` to check an image for runtime deviations.
 type IDB struct {
-	fs apkfs.FullFS
+	fs apk.FullFS
 }
 
-func New(fs apkfs.FullFS) IDB {
+func New(fs apk.FullFS) IDB {
 	return IDB{fs}
 }
 

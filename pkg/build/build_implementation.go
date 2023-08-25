@@ -32,6 +32,7 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/chainguard-dev/go-apk/pkg/apk"
+	apkfs "github.com/chainguard-dev/go-apk/pkg/apk"
 	"github.com/chainguard-dev/go-apk/pkg/tarball"
 	"github.com/sigstore/cosign/v2/pkg/oci"
 	"gitlab.alpinelinux.org/alpine/go/repository"
@@ -57,7 +58,7 @@ func min(l, r int) int {
 
 // BuildTarball takes the fully populated working directory and saves it to
 // an OCI image layer tar.gz file.
-func (bc *Context) BuildTarball(ctx context.Context) (string, hash.Hash, hash.Hash, int64, error) {
+func (bc *Context) BuildTarball(ctx context.Context, fs apkfs.FullFS) (string, hash.Hash, hash.Hash, int64, error) {
 	ctx, span := otel.Tracer("apko").Start(ctx, "BuildTarball")
 	defer span.End()
 
@@ -93,7 +94,7 @@ func (bc *Context) BuildTarball(ctx context.Context) (string, hash.Hash, hash.Ha
 
 	diffid := sha256.New()
 
-	if err := tw.WriteTar(ctx, io.MultiWriter(diffid, gzw), bc.fs); err != nil {
+	if err := tw.WriteTar(ctx, io.MultiWriter(diffid, gzw), fs); err != nil {
 		return "", nil, nil, 0, fmt.Errorf("failed to generate tarball for image: %w", err)
 	}
 	if err := gzw.Close(); err != nil {
@@ -113,57 +114,58 @@ func (bc *Context) BuildTarball(ctx context.Context) (string, hash.Hash, hash.Ha
 	return outfile.Name(), diffid, digest, stat.Size(), nil
 }
 
-func (bc *Context) buildImage(ctx context.Context) error {
+func (bc *Context) buildImage(ctx context.Context) (apk.FullFS, error) {
 	ctx, span := otel.Tracer("apko").Start(ctx, "buildImage")
 	defer span.End()
 
-	if err := bc.apk.FixateWorld(ctx, &bc.o.SourceDateEpoch); err != nil {
-		return fmt.Errorf("installing apk packages: %w", err)
+	fs, err := bc.apk.FixateWorld(ctx, &bc.o.SourceDateEpoch)
+	if err != nil {
+		return nil, fmt.Errorf("installing apk packages: %w", err)
 	}
 
-	if err := mutateAccounts(bc.fs, &bc.o, &bc.ic); err != nil {
-		return fmt.Errorf("failed to mutate accounts: %w", err)
+	if err := mutateAccounts(fs, &bc.o, &bc.ic); err != nil {
+		return nil, fmt.Errorf("failed to mutate accounts: %w", err)
 	}
 
-	if err := mutatePaths(bc.fs, &bc.o, &bc.ic); err != nil {
-		return fmt.Errorf("failed to mutate paths: %w", err)
+	if err := mutatePaths(fs, &bc.o, &bc.ic); err != nil {
+		return nil, fmt.Errorf("failed to mutate paths: %w", err)
 	}
 
-	if err := GenerateOSRelease(bc.fs, &bc.o, &bc.ic); err != nil {
+	if err := GenerateOSRelease(fs, &bc.o, &bc.ic); err != nil {
 		if errors.Is(err, ErrOSReleaseAlreadyPresent) {
 			bc.Logger().Warnf("did not generate /etc/os-release: %v", err)
 		} else {
-			return fmt.Errorf("failed to generate /etc/os-release: %w", err)
+			return nil, fmt.Errorf("failed to generate /etc/os-release: %w", err)
 		}
 	}
 
 	if err := bc.s6.WriteSupervisionTree(bc.ic.Entrypoint.Services); err != nil {
-		return fmt.Errorf("failed to write supervision tree: %w", err)
+		return nil, fmt.Errorf("failed to write supervision tree: %w", err)
 	}
 
 	// add busybox symlinks
 	installed, err := bc.apk.GetInstalled()
 	if err != nil {
-		return fmt.Errorf("getting installed packages: %w", err)
+		return nil, fmt.Errorf("getting installed packages: %w", err)
 	}
 
-	if err := installBusyboxLinks(bc.fs, installed); err != nil {
-		return err
+	if err := installBusyboxLinks(fs, installed); err != nil {
+		return nil, err
 	}
 
 	// add ldconfig links
-	if err := installLdconfigLinks(bc.fs); err != nil {
-		return err
+	if err := installLdconfigLinks(fs); err != nil {
+		return nil, err
 	}
 
 	// add necessary character devices
-	if err := installCharDevices(bc.fs); err != nil {
-		return err
+	if err := installCharDevices(fs); err != nil {
+		return nil, err
 	}
 
 	bc.Logger().Infof("finished building filesystem in %s", bc.o.WorkDir)
 
-	return nil
+	return fs, nil
 }
 
 // WriteIndex saves the index file from the given image configuration.

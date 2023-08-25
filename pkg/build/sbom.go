@@ -28,7 +28,7 @@ import (
 	"chainguard.dev/apko/pkg/sbom/generator"
 	soptions "chainguard.dev/apko/pkg/sbom/options"
 
-	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
+	"github.com/chainguard-dev/go-apk/pkg/apk"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	ggcrtypes "github.com/google/go-containerregistry/pkg/v1/types"
@@ -37,7 +37,7 @@ import (
 	khash "sigs.k8s.io/release-utils/hash"
 )
 
-func newSBOM(fsys apkfs.FullFS, o options.Options, ic types.ImageConfiguration, bde time.Time) soptions.Options {
+func newSBOM(fsys apk.FullFS, o options.Options, ic types.ImageConfiguration, bde time.Time) soptions.Options {
 	sopt := sbom.DefaultOptions
 	sopt.FS = fsys
 	sopt.FileName = fmt.Sprintf("sbom-%s", o.Arch.ToAPK())
@@ -94,12 +94,12 @@ func (bc *Context) GenerateImageSBOM(ctx context.Context, arch types.Architectur
 		return nil, fmt.Errorf("unexpected layers in %s manifest: %d", arch, len(m.Layers))
 	}
 
-	s := newSBOM(bc.fs, bc.o, bc.ic, bde)
+	s := newSBOM(bc.vfs, bc.o, bc.ic, bde)
 	bc.Logger().Infof("Generating image SBOM for %s", arch.String())
 
 	s.ImageInfo.LayerDigest = m.Layers[0].Digest.String()
 
-	info, err := sbom.ReadReleaseData(bc.fs)
+	info, err := sbom.ReadReleaseData(bc.vfs)
 	if err != nil {
 		return nil, fmt.Errorf("reading release data: %w", err)
 	}
@@ -108,7 +108,7 @@ func (bc *Context) GenerateImageSBOM(ctx context.Context, arch types.Architectur
 	s.OS.ID = info.ID
 	s.OS.Version = info.VersionID
 
-	pkgs, err := sbom.ReadPackageIndex(bc.fs)
+	pkgs, err := sbom.ReadPackageIndex(bc.vfs)
 	if err != nil {
 		return nil, fmt.Errorf("reading apk package index: %w", err)
 	}
@@ -124,7 +124,7 @@ func (bc *Context) GenerateImageSBOM(ctx context.Context, arch types.Architectur
 	s.ImageInfo.Arch = arch
 
 	var sboms = make([]types.SBOM, 0)
-	generators := generator.Generators(bc.fs)
+	generators := generator.Generators(bc.vfs)
 	for _, format := range s.Formats {
 		gen, ok := generators[format]
 		if !ok {

@@ -15,12 +15,11 @@
 package generator
 
 import (
-	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
-
 	"chainguard.dev/apko/pkg/sbom/generator/cyclonedx"
 	"chainguard.dev/apko/pkg/sbom/generator/idb"
 	"chainguard.dev/apko/pkg/sbom/generator/spdx"
 	"chainguard.dev/apko/pkg/sbom/options"
+	"github.com/chainguard-dev/go-apk/pkg/apk"
 )
 
 type Generator interface {
@@ -30,7 +29,7 @@ type Generator interface {
 	GenerateIndex(*options.Options, string) error
 }
 
-func Generators(fsys apkfs.FullFS) map[string]Generator {
+func Generators(fsys apk.FullFS) map[string]Generator {
 	generators := map[string]Generator{}
 
 	sx := spdx.New(fsys)
