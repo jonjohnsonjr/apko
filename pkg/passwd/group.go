@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -81,6 +82,7 @@ func (gf *GroupFile) Load(r io.Reader) error {
 	for scanner.Scan() {
 		ge := GroupEntry{}
 
+		log.Printf("Load: %s", scanner.Text())
 		if err := ge.Parse(scanner.Text()); err != nil {
 			return fmt.Errorf("unable to parse: %w", err)
 		}
