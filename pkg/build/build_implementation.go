@@ -118,7 +118,12 @@ func (bc *Context) fixateWorld(ctx context.Context) error {
 	}
 
 	// If we have a lock file, we can skip resolving entirely
-	return fmt.Errorf("TODO: Parse lockfile")
+	toInstall, err := parseLockfile(bc.o.LockFile)
+	if err != nil {
+		return fmt.Errorf("parsing lockfile %s: %w", bc.o.LockFile, err)
+	}
+
+	return bc.apk.InstallPackages(ctx, &bc.o.SourceDateEpoch, toInstall)
 }
 
 func (bc *Context) buildImage(ctx context.Context) error {
