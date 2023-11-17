@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/chainguard-dev/go-apk/pkg/apk"
 	apkfs "github.com/chainguard-dev/go-apk/pkg/fs"
 	"github.com/spf13/cobra"
 	"golang.org/x/exp/slices"
@@ -195,7 +196,6 @@ func ResolveCmd(ctx context.Context, output string, archs []types.Architecture, 
 		}
 
 		resolvedPkgs, err := bc.Resolve(ctx)
-
 		if err != nil {
 			return fmt.Errorf("failed to get package list for image: %w", err)
 		}
@@ -249,4 +249,35 @@ func stripURLScheme(url string) string {
 		strings.TrimPrefix(url, "https://"),
 		"http://",
 	)
+}
+
+func parseLockfile(name string) ([]*apk.RepositoryPackage, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	lock := lock{}
+
+	if err := json.NewDecoder(f).Decode(&lock); err != nil {
+		return nil, err
+	}
+
+	repos := map[string]apk.Repository{}
+	for _, repo := range lock.Contents.Repositories {
+		key := strings.TrimSuffix(repo.URL, "/APKINDEX.tar.gz")
+		repos[key] = repo := apk.Repository{
+			URI: key,
+		}
+	}
+
+	toInstall := make([]*apk.RepositoryPackage, 0, len(lock.Contents.Packages))
+	for _, pkg := range lock.Contents.Packages {
+		repo := apk.Repository{
+			URI: "TODO",
+		}
+	}
+
+	return toInstall, nil
 }

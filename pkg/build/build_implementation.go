@@ -112,11 +112,20 @@ func (bc *Context) BuildTarball(ctx context.Context) (string, hash.Hash, hash.Ha
 	return outfile.Name(), diffid, digest, stat.Size(), nil
 }
 
+func (bc *Context) fixateWorld(ctx context.Context) error {
+	if bc.o.LockFile == "" {
+		return bc.apk.FixateWorld(ctx, &bc.o.SourceDateEpoch)
+	}
+
+	// If we have a lock file, we can skip resolving entirely
+	return fmt.Errorf("TODO: Parse lockfile")
+}
+
 func (bc *Context) buildImage(ctx context.Context) error {
 	ctx, span := otel.Tracer("apko").Start(ctx, "buildImage")
 	defer span.End()
 
-	if err := bc.apk.FixateWorld(ctx, &bc.o.SourceDateEpoch); err != nil {
+	if err := bc.fixateWorld(ctx); err != nil {
 		return fmt.Errorf("installing apk packages: %w", err)
 	}
 
