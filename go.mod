@@ -2,6 +2,8 @@ module chainguard.dev/apko
 
 go 1.21
 
+replace github.com/chainguard-dev/go-apk => ../go-apk
+
 require (
 	github.com/chainguard-dev/go-apk v0.0.0-20231218235333-2acefacd5846
 	github.com/dominodatalab/os-release v0.0.0-20190522011736-bcdb4a3e3c2f
