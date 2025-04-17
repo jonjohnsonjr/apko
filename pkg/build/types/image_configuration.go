@@ -119,8 +119,11 @@ func (ic *ImageConfiguration) MergeInto(target *ImageConfiguration) error {
 	if target.WorkDir == "" {
 		target.WorkDir = ic.WorkDir
 	}
-	if target.Layering == nil {
-		target.Layering = ic.Layering
+
+	// TODO MORE
+	target.Layering = ic.Layering
+	if err := ic.Layering.MergeInto(target.Layering); err != nil {
+		return err
 	}
 	if len(target.Archs) == 0 {
 		target.Archs = ic.Archs
@@ -168,6 +171,11 @@ func (i *ImageContents) MergeInto(target *ImageContents) error {
 	target.BuildRepositories = slices.Concat(i.BuildRepositories, target.BuildRepositories)
 	target.RuntimeRepositories = slices.Concat(i.RuntimeRepositories, target.RuntimeRepositories)
 	target.Packages = slices.Concat(i.Packages, target.Packages)
+	return nil
+}
+
+// TODO: This.
+func (l *Layering) MergeInto(target *Layering) error {
 	return nil
 }
 

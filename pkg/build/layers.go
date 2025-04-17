@@ -50,7 +50,7 @@ func (bc *Context) buildLayers(ctx context.Context) ([]v1.Layer, error) {
 	}
 
 	// Use our layering strategy to partition packages into a set of Budget groups.
-	groups, err := groupByOriginAndSize(pkgs, bc.ic.Layering.Budget)
+	groups, err := groupByOriginAndSize(pkgs, bc.ic.Layering.Budget, bc.ic.Layering.Cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("grouping packages: %w", err)
 	}
@@ -96,10 +96,28 @@ func replacesGroup(rep string, g *group) (bool, error) {
 	return false, nil
 }
 
-func groupByOriginAndSize(pkgs []*apk.Package, budget int) ([]*group, error) {
+func groupByOriginAndSize(pkgs []*apk.Package, budget int, cutoff uint64) ([]*group, error) {
+	bigPackages := map[string]*group{}
+	if cutoff != 0 {
+		for _, pkg := range pkgs {
+			if pkg.InstalledSize > cutoff {
+				g := &group{
+					pkgs:       []*apk.Package{pkg},
+					size:       pkg.InstalledSize,
+					tiebreaker: pkg.Name,
+				}
+				bigPackages[pkg.Name] = g
+			}
+		}
+	}
+
 	// First, we're going to group packages by their origin.
 	byOrigin := map[string]*group{}
 	for _, pkg := range pkgs {
+		if _, ok := bigPackages[pkg.Name]; ok {
+			continue
+		}
+
 		origin := pkg.Origin
 		if _, ok := byOrigin[origin]; !ok {
 			byOrigin[origin] = &group{}
@@ -116,6 +134,11 @@ func groupByOriginAndSize(pkgs []*apk.Package, budget int) ([]*group, error) {
 	// Then we need to merge any packages that replace each other.
 	byPackage := map[string]*group{}
 	for _, g := range byOrigin {
+		for _, pkg := range g.pkgs {
+			byPackage[pkg.Name] = g
+		}
+	}
+	for _, g := range bigPackages {
 		for _, pkg := range g.pkgs {
 			byPackage[pkg.Name] = g
 		}
@@ -165,6 +188,7 @@ func groupByOriginAndSize(pkgs []*apk.Package, budget int) ([]*group, error) {
 			for _, pkg := range merged.pkgs {
 				byPackage[pkg.Name] = merged
 				byOrigin[pkg.Origin] = merged
+				bigPackages[pkg.Name] = merged
 			}
 		}
 	}
@@ -174,6 +198,13 @@ func groupByOriginAndSize(pkgs []*apk.Package, budget int) ([]*group, error) {
 	groups := make([]*group, 0, budget)
 	seen := map[*group]struct{}{}
 	for v := range maps.Values(byOrigin) {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		groups = append(groups, v)
+	}
+	for v := range maps.Values(bigPackages) {
 		if _, ok := seen[v]; ok {
 			continue
 		}

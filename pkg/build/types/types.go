@@ -414,4 +414,7 @@ type SBOM struct {
 type Layering struct {
 	Strategy string `json:"strategy,omitempty" yaml:"strategy,omitempty"`
 	Budget   int    `json:"budget,omitempty" yaml:"budget,omitempty"`
+
+	// TODO: Mention replaces logic and budget as they relate to cutoff.
+	Cutoff uint64 `json:"cutoff,omitempty" yaml:"cutoff,omitempty"`
 }
