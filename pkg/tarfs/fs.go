@@ -956,6 +956,24 @@ func (f *memFile) Write(p []byte) (n int, err error) {
 		copy(f.node.data[f.offset:], p)
 	}
 	f.offset += int64(len(p))
+
+	// Writing to a file that was owned by an APK is uncommon but sometimes happens.
+	// The only place we usually see this happen is for etc/ld.so.cache which is
+	// overwritten in buildImage() by updateCache() in pkg/build.
+	//
+	// This is unfortunate because ld-linux contains a default etc/ld.so.cache file,
+	// which means the glibc origin doesn't get shared across layers when layering is
+	// involved. To mitigate that, if we ever overwrite a file that belongs to a package,
+	// we'll just clear its ownership entirely so that we get better layer reuse.
+	//
+	// The net result of this is that etc/ld.so.cache will end up in the top layer
+	// instead of in the glibc layer, which means we save about 20MB across most images.
+	//
+	// Other affected but less relevant files are things like etc/group and etc/passwd,
+	// which will move from (usually) the leftover layer to the top layer, since their
+	// contents also ovewritten based on the apko config.
+	f.node.te = nil
+
 	return len(p), nil
 }
 
